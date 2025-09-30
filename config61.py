@@ -1,9 +1,12 @@
 # config61.py
-from dataclasses import dataclass
+# Central configuration constants for the Cost and Price Calculator
 
-@dataclass(frozen=True)
-class AppConfig:
-    FULL_UTILISATION_WEEK: float = 37.5   # reference week for hours scaling
-    GLOBAL_OUTPUT_DEFAULT: int = 100      # default planned prisoner output %
-
-CFG = AppConfig()
+CFG = {
+    "VAT_RATE": 20.0,     # VAT % applied to commercial customers
+    "DEV_RATE_BASE": 0.20,  # Development charge starts at 20% of instructor cost
+    "SHADOW_COSTS": {
+        "Outer London": 45855.97,
+        "Inner London": 49202.70,
+        "National": 42247.81,
+    },
+}
