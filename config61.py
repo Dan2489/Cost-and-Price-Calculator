@@ -1,11 +1,10 @@
 # config61.py
-from dataclasses import dataclass
+# Central configuration for the Cost and Price Calculator
 
-@dataclass(frozen=True)
-class AppConfig:
-    vat_rate: float = 20.0
-    development_charge: float = 0.20
-    GLOBAL_OUTPUT_DEFAULT: int = 100
-    overheads_rate: float = 0.61
-
-CFG = AppConfig()
+class CFG:
+    vat_rate = 20.0               # Always 20%
+    development_charge = 0.20     # Starts at 20%
+    overheads_rate = 0.61         # Overheads always 61%
+    default_hours = 37.5
+    default_prisoner_salary = 10.0
+    global_output_default = 100
