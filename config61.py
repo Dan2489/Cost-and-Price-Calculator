@@ -1,27 +1,18 @@
 # config61.py
+# Central configuration file for the Cost and Price Calculator
 
-from dataclasses import dataclass, field
+CFG = {
+    # Default VAT rate (only applied to Commercial customers when selected)
+    "vat_rate": 20.0,
 
-@dataclass(frozen=True)
-class AppConfig:
-    # VAT percentage
-    VAT_RATE: float = 20.0
+    # Default workshop settings
+    "default_hours": 37.5,             # hours per week
+    "default_prisoner_salary": 10.0,   # £ per week
 
-    # Base development charge rate (20%)
-    DEV_RATE_BASE: float = 0.20
+    # Development charge (applies only to Commercial contracts)
+    # Starts at 20%, deductions applied based on employment support options
+    "development_charge": 0.20,
 
-    # Default prisoner output percentage (100%)
-    GLOBAL_OUTPUT_DEFAULT: int = 100
-
-    # Shadow Band 3 costs (annual) for when customer provides instructors
-    SHADOW_COSTS: dict = field(default_factory=lambda: {
-        "Outer London": 45855.97,
-        "Inner London": 49202.70,
-        "National": 42247.81,
-    })
-
-    def __getitem__(self, key: str):
-        return getattr(self, key)
-
-# Global config object
-CFG = AppConfig()
+    # Overheads method (fixed at 61% of instructor/shadow costs)
+    "overheads_rate": 0.61,
+}
