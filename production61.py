@@ -1,15 +1,9 @@
 # production61.py
 from typing import List, Dict, Optional
-import math
 from datetime import date, timedelta
+import math
 from config61 import CFG
-
-# Band 3 shadow costs (annual)
-BAND3_COSTS = {
-    "Outer London": 45855.97,
-    "Inner London": 49202.70,
-    "National": 42247.81,
-}
+from tariff61 import BAND3_COSTS
 
 # ---------- Helpers ----------
 def labour_minutes_budget(num_pris: int, hours: float) -> float:
@@ -40,7 +34,7 @@ def calculate_production_contractual(
 
     # Overhead base
     if customer_covers_supervisors:
-        shadow = BAND3_COSTS.get(region, 42247.81)
+        shadow = BAND3_COSTS.get(region, BAND3_COSTS["National"])
         overhead_base = (shadow / 52.0) * (effective_pct / 100.0)
     else:
         overhead_base = inst_weekly_total
@@ -98,8 +92,8 @@ def calculate_production_contractual(
 
         # Costs
         unit_cost_ex_vat = (weekly_cost_item / units_for_pricing) if units_for_pricing > 0 else None
-        if unit_cost_ex_vat is not None and customer_type == "Commercial":
-            unit_price_inc_vat = unit_cost_ex_vat * 1.2
+        if unit_cost_ex_vat is not None and (customer_type == "Commercial"):
+            unit_price_inc_vat = unit_cost_ex_vat * 1.20
         else:
             unit_price_inc_vat = unit_cost_ex_vat
 
@@ -158,7 +152,7 @@ def calculate_adhoc(
         inst_weekly_total = 0.0
 
     if customer_covers_supervisors:
-        shadow = BAND3_COSTS.get(region, 42247.81)
+        shadow = BAND3_COSTS.get(region, BAND3_COSTS["National"])
         overhead_base = (shadow / 52.0) * (effective_pct / 100.0)
     else:
         overhead_base = inst_weekly_total
@@ -177,7 +171,7 @@ def calculate_adhoc(
     for ln in lines:
         mins_per_unit = float(ln["mins_per_item"]) * int(ln["pris_per_item"])
         unit_cost_ex_vat = cost_per_minute * mins_per_unit
-        unit_cost_inc_vat = unit_cost_ex_vat * 1.2 if customer_type == "Commercial" else unit_cost_ex_vat
+        unit_cost_inc_vat = unit_cost_ex_vat * 1.20 if customer_type == "Commercial" else unit_cost_ex_vat
 
         total_line_minutes = int(ln["units"]) * mins_per_unit
         total_job_minutes += total_line_minutes
