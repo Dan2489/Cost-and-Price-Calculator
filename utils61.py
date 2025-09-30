@@ -7,22 +7,18 @@ def inject_govuk_css():
     st.markdown(
         """
         <style>
-          /* Sidebar responsive */
-          [data-testid="stSidebar"] {
-            width: 400px !important;
+          /* Sidebar width: only constrain on desktop */
+          @media (min-width: 1200px) {
+            [data-testid="stSidebar"] {
+              width: 380px !important;
+            }
           }
-          @media (max-width: 1200px) {
+          @media (min-width: 768px) and (max-width: 1199px) {
             [data-testid="stSidebar"] {
               width: 300px !important;
             }
           }
-          @media (max-width: 768px) {
-            [data-testid="stSidebar"] {
-              width: auto !important;  /* Let Streamlit handle mobile collapse */
-              min-width: unset !important;
-              max-width: unset !important;
-            }
-          }
+          /* On mobile, let Streamlit handle collapse — no forced widths */
 
           /* GOV.UK colours */
           :root {
@@ -96,11 +92,13 @@ def fmt_currency(v) -> str:
     except Exception:
         return ""
 
+
 def recommended_instructor_allocation(workshop_hours: float, contracts: int) -> float:
     """Recommended instructor % based on 37.5h baseline and contracts."""
     if workshop_hours <= 0 or contracts <= 0:
         return 0.0
     return round((37.5 / workshop_hours) * (1 / contracts) * 100, 1)
+
 
 def render_summary_table(rows: list[tuple[str, float]], dev_reduction: bool = False) -> str:
     """Render a GOV.UK-style summary table with optional dev charge reduction in red."""
@@ -110,7 +108,7 @@ def render_summary_table(rows: list[tuple[str, float]], dev_reduction: bool = Fa
         css = ""
         if dev_reduction and "reduction" in label.lower():
             css = " class='neg'"
-        elif "total" in label.lower() or "subtotal" in label.lower() or "grand" in label.lower():
+        elif any(word in label.lower() for word in ["total", "subtotal", "grand"]):
             css = " class='total'"
         html.append(f"<tr><td>{label}</td><td{css}>{fmt_currency(val)}</td></tr>")
     html.append("</table>")
