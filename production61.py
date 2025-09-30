@@ -1,6 +1,8 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Tuple, Optional
 from datetime import date, timedelta
 import math
+
+from config61 import CFG
 
 # ---------- Helpers ----------
 def labour_minutes_budget(num_pris: int, hours: float) -> float:
@@ -17,31 +19,49 @@ def calculate_production_contractual(
     effective_pct: float,
     customer_covers_supervisors: bool,
     customer_type: str,
+    support: str,           # <-- NEW for dev charge reductions
     apply_vat: bool,
     vat_rate: float,
     num_prisoners: int,
     num_supervisors: int,
-    dev_rate: float,
-    pricing_mode: str = "as-is",          # "as-is" or "target"
-    targets: Optional[List[int]] = None,  # per-item target units/week if "target"
-    overheads_weekly: float = 0.0,        # passed in from newapp61 (calculated separately)
-) -> Dict:
+    lock_overheads: bool,   # <-- NEW from sidebar
+    dev_rate: float,        # kept for compatibility, but ignored (we use breakdown)
+    pricing_mode: str = "as-is",
+    targets: Optional[List[int]] = None,
+) -> Tuple[List[Dict], Dict]:
     """
-    Returns a dict with:
-      - per_item: list of rows for the breakdown table
-      - grand_monthly_total: sum of all monthly totals
+    Production cost calculator (contractual).
+    - Overheads = 61% of instructor costs (or Band 3 shadow if customer provides).
+    - Development charge shown as base, reductions, applied.
     """
 
-    inst_weekly_total = (
-        sum((s / 52.0) * (float(effective_pct) / 100.0) for s in supervisor_salaries)
-        if not customer_covers_supervisors else 0.0
-    )
-    prisoners_weekly_total = num_prisoners * prisoner_salary
+    # Instructor costs (weekly)
+    inst_weekly_total = 0.0
+    if not customer_covers_supervisors and supervisor_salaries:
+        if lock_overheads:
+            # Use highest salary only for overheads
+            inst_weekly_total = (max(supervisor_salaries) / 52.0) * (float(effective_pct) / 100.0)
+        else:
+            inst_weekly_total = sum((s / 52.0) * (float(effective_pct) / 100.0) for s in supervisor_salaries)
 
+    # Overheads = 61% of instructor cost
+    overheads_weekly = inst_weekly_total * 0.61
+
+    # Development charge breakdown
+    dev_base = overheads_weekly * 0.20
+    dev_reduction = 0.0
+    if customer_type == "Commercial":
+        if support in ("Employment on release/RoTL", "Post release"):
+            dev_reduction = -overheads_weekly * 0.10
+        elif support == "Both":
+            dev_reduction = -overheads_weekly * 0.20
+    dev_applied = dev_base + dev_reduction
+
+    # Denominator for share
     denom = sum(int(it.get("assigned", 0)) * workshop_hours * 60.0 for it in items)
     output_scale = float(output_pct) / 100.0
 
-    per_item: List[Dict] = []
+    results: List[Dict] = []
     grand_monthly_total = 0.0
 
     for idx, it in enumerate(items):
@@ -59,23 +79,22 @@ def calculate_production_contractual(
         share = ((pris_assigned * workshop_hours * 60.0) / denom) if denom > 0 else 0.0
 
         prisoner_weekly_item = pris_assigned * prisoner_salary
-        inst_weekly_item = inst_weekly_total * share
+        inst_weekly_item      = inst_weekly_total * share
         overheads_weekly_item = overheads_weekly * share
-        weekly_cost_item = prisoner_weekly_item + inst_weekly_item + overheads_weekly_item
+        dev_weekly_item       = dev_applied * share
+        weekly_cost_item      = prisoner_weekly_item + inst_weekly_item + overheads_weekly_item + dev_weekly_item
 
         if pricing_mode == "target":
             tgt = 0
             if targets and idx < len(targets):
-                try:
-                    tgt = int(targets[idx])
-                except Exception:
-                    tgt = 0
+                try: tgt = int(targets[idx])
+                except Exception: tgt = 0
             units_for_pricing = float(tgt)
         else:
             units_for_pricing = capacity_units
 
         available_minutes_item = pris_assigned * workshop_hours * 60.0 * output_scale
-        required_minutes_item = units_for_pricing * mins_per_unit * pris_required
+        required_minutes_item  = units_for_pricing * mins_per_unit * pris_required
         feasible = (required_minutes_item <= (available_minutes_item + 1e-6))
         note = None
         if pricing_mode == "target" and not feasible:
@@ -85,22 +104,21 @@ def calculate_production_contractual(
             )
 
         unit_cost_ex_vat = (weekly_cost_item / units_for_pricing) if units_for_pricing > 0 else None
+        monthly_total = (units_for_pricing * (unit_cost_ex_vat or 0.0)) * (52.0 / 12.0)
+
         unit_price_ex_vat = unit_cost_ex_vat
-        if unit_price_ex_vat is not None and (customer_type == "Commercial" and apply_vat):
-            unit_price_inc_vat = unit_price_ex_vat * (1 + (float(vat_rate) / 100.0))
-        else:
-            unit_price_inc_vat = unit_price_ex_vat
+        unit_price_inc_vat = None
+        if unit_price_ex_vat is not None:
+            if customer_type == "Commercial" and apply_vat:
+                unit_price_inc_vat = unit_price_ex_vat * (1 + (float(vat_rate) / 100.0))
+            else:
+                unit_price_inc_vat = unit_price_ex_vat
 
-        # --- Monthly total ---
-        monthly_total = 0.0
-        if unit_cost_ex_vat is not None and units_for_pricing > 0:
-            monthly_total = units_for_pricing * unit_cost_ex_vat * (52.0 / 12.0)
-            grand_monthly_total += monthly_total
+        grand_monthly_total += monthly_total
 
-        per_item.append({
+        results.append({
             "Item": name,
             "Output %": int(output_pct),
-            "Pricing mode": "Target units/week" if pricing_mode == "target" else "As-is (max units)",
             "Capacity (units/week)": 0 if capacity_units <= 0 else int(round(capacity_units)),
             "Units/week": 0 if units_for_pricing <= 0 else int(round(units_for_pricing)),
             "Unit Cost (£)": unit_cost_ex_vat,
@@ -111,7 +129,12 @@ def calculate_production_contractual(
             "Note": note,
         })
 
-    return {
-        "per_item": per_item,
+    ctx = {
+        "overheads_weekly": overheads_weekly,
+        "dev_base": dev_base,
+        "dev_reduction": dev_reduction,
+        "dev_applied": dev_applied,
         "grand_monthly_total": grand_monthly_total,
     }
+
+    return results, ctx
