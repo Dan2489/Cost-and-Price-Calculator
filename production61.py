@@ -1,7 +1,7 @@
 # production61.py
 from typing import List, Dict, Optional
-from datetime import date, timedelta
 import math
+from datetime import date, timedelta
 from config61 import CFG
 from tariff61 import BAND3_COSTS
 
@@ -22,8 +22,8 @@ def calculate_production_contractual(
     region: str,
     customer_type: str,
     dev_rate: float,
-    pricing_mode: str = "as-is",
-    targets: Optional[List[int]] = None,
+    pricing_mode: str = "as-is",          # "as-is" or "target"
+    targets: Optional[List[int]] = None,  # per-item target units/week if "target"
     lock_overheads: bool = False,
 ) -> List[Dict]:
     # Instructor weekly cost
@@ -92,10 +92,9 @@ def calculate_production_contractual(
 
         # Costs
         unit_cost_ex_vat = (weekly_cost_item / units_for_pricing) if units_for_pricing > 0 else None
-        if unit_cost_ex_vat is not None and (customer_type == "Commercial"):
-            unit_price_inc_vat = unit_cost_ex_vat * 1.20
-        else:
-            unit_price_inc_vat = unit_cost_ex_vat
+        unit_price_inc_vat = (
+            unit_cost_ex_vat * (1 + 0.20) if (unit_cost_ex_vat and customer_type == "Commercial") else unit_cost_ex_vat
+        )
 
         monthly_total_ex_vat = (units_for_pricing * unit_cost_ex_vat * 52 / 12) if unit_cost_ex_vat else None
         monthly_total_inc_vat = (units_for_pricing * unit_price_inc_vat * 52 / 12) if unit_price_inc_vat else None
@@ -146,11 +145,13 @@ def calculate_adhoc(
     current_daily_capacity = num_prisoners * daily_minutes_capacity_per_prisoner
     minutes_per_week_capacity = max(1e-9, num_prisoners * workshop_hours * 60.0 * output_scale)
 
+    # Instructor weekly cost
     if not customer_covers_supervisors:
         inst_weekly_total = sum((s / 52.0) * (effective_pct / 100.0) for s in supervisor_salaries)
     else:
         inst_weekly_total = 0.0
 
+    # Overhead base
     if customer_covers_supervisors:
         shadow = BAND3_COSTS.get(region, BAND3_COSTS["National"])
         overhead_base = (shadow / 52.0) * (effective_pct / 100.0)
@@ -171,7 +172,7 @@ def calculate_adhoc(
     for ln in lines:
         mins_per_unit = float(ln["mins_per_item"]) * int(ln["pris_per_item"])
         unit_cost_ex_vat = cost_per_minute * mins_per_unit
-        unit_cost_inc_vat = unit_cost_ex_vat * 1.20 if customer_type == "Commercial" else unit_cost_ex_vat
+        unit_cost_inc_vat = unit_cost_ex_vat * (1 + 0.20) if customer_type == "Commercial" else unit_cost_ex_vat
 
         total_line_minutes = int(ln["units"]) * mins_per_unit
         total_job_minutes += total_line_minutes
@@ -199,7 +200,7 @@ def calculate_adhoc(
     if hard_block:
         reason = (
             f"Requested total minutes ({total_job_minutes:,.0f}) exceed available minutes by the earliest deadline "
-            f"({available_total_minutes_by_deadline:,.0f})."
+            f"({available_total_minutes_by_deadline:,.0f}). Reduce units, add prisoners, increase hours, extend deadline or lower Output%."
         )
 
     totals_ex = sum(p["line_total_ex_vat"] for p in per_line)
