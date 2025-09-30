@@ -6,16 +6,14 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from config import CFG
-from style import inject_govuk_css
-from tariff import PRISON_TO_REGION, SUPERVISOR_PAY
-from sidebar61 import draw_sidebar
-from production import (
+from config61 import CFG
+from utils61 import inject_govuk_css, PRISON_TO_REGION, SUPERVISOR_PAY, draw_sidebar
+from production61 import (
     labour_minutes_budget,
     calculate_production_contractual,
     calculate_adhoc,
 )
-from host import generate_host_quote
+from host61 import generate_host_quote
 
 # -----------------------------------------------------------------------------
 # Page config + CSS
