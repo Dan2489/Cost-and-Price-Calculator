@@ -50,9 +50,46 @@ def inject_govuk_css() -> None:
 PRISON_TO_REGION = {
     "Altcourse": "National", "Ashfield": "National", "Askham Grange": "National",
     "Aylesbury": "National", "Bedford": "National", "Belmarsh": "Inner London",
-    "Brixton": "Inner London", "Liverpool": "National", "Manchester": "National",
-    "Pentonville": "Inner London", "Wandsworth": "Inner London",
-    # … keep full list from your tariff61.py
+    "Berwyn": "National", "Birmingham": "National", "Brinsford": "National",
+    "Bristol": "National", "Brixton": "Inner London", "Bronzefield": "Outer London",
+    "Buckley Hall": "National", "Bullingdon": "National", "Bure": "National",
+    "Cardiff": "National", "Channings Wood": "National", "Chelmsford": "National",
+    "Coldingley": "Outer London", "Cookham Wood": "National", "Dartmoor": "National",
+    "Deerbolt": "National", "Doncaster": "National", "Dovegate": "National",
+    "Downview": "Outer London", "Drake Hall": "National", "Durham": "National",
+    "East Sutton Park": "National", "Eastwood Park": "National", "Elmley": "National",
+    "Erlestoke": "National", "Exeter": "National", "Featherstone": "National",
+    "Feltham A": "Outer London", "Feltham B": "Outer London", "Five Wells": "National",
+    "Ford": "National", "Forest Bank": "National", "Fosse Way": "National",
+    "Foston Hall": "National", "Frankland": "National", "Full Sutton": "National",
+    "Garth": "National", "Gartree": "National", "Grendon": "National",
+    "Guys Marsh": "National", "Hatfield": "National", "Haverigg": "National",
+    "Hewell": "National", "High Down": "Outer London", "Highpoint": "National",
+    "Hindley": "National", "Hollesley Bay": "National", "Holme House": "National",
+    "Hull": "National", "Humber": "National", "Huntercombe": "National",
+    "Isis": "Inner London", "Isle of Wight": "National", "Kirkham": "National",
+    "Kirklevington Grange": "National", "Lancaster Farms": "National",
+    "Leeds": "National", "Leicester": "National", "Lewes": "National",
+    "Leyhill": "National", "Lincoln": "National", "Lindholme": "National",
+    "Littlehey": "National", "Liverpool": "National", "Long Lartin": "National",
+    "Low Newton": "National", "Lowdham Grange": "National", "Maidstone": "National",
+    "Manchester": "National", "Moorland": "National", "Morton Hall": "National",
+    "The Mount": "National", "New Hall": "National", "North Sea Camp": "National",
+    "Northumberland": "National", "Norwich": "National", "Nottingham": "National",
+    "Oakwood": "National", "Onley": "National", "Parc": "National", "Parc (YOI)": "National",
+    "Pentonville": "Inner London", "Peterborough Female": "National",
+    "Peterborough Male": "National", "Portland": "National", "Prescoed": "National",
+    "Preston": "National", "Ranby": "National", "Risley": "National", "Rochester": "National",
+    "Rye Hill": "National", "Send": "National", "Spring Hill": "National",
+    "Stafford": "National", "Standford Hill": "National", "Stocken": "National",
+    "Stoke Heath": "National", "Styal": "National", "Sudbury": "National",
+    "Swaleside": "National", "Swansea": "National", "Swinfen Hall": "National",
+    "Thameside": "Inner London", "Thorn Cross": "National", "Usk": "National",
+    "Verne": "National", "Wakefield": "National", "Wandsworth": "Inner London",
+    "Warren Hill": "National", "Wayland": "National", "Wealstun": "National",
+    "Werrington": "National", "Wetherby": "National", "Whatton": "National",
+    "Whitemoor": "National", "Winchester": "National", "Woodhill": "Inner London",
+    "Wormwood Scrubs": "Inner London", "Wymott": "National",
 }
 
 # ------------------------
@@ -76,37 +113,29 @@ SUPERVISOR_PAY = {
 # ------------------------
 # Sidebar controls
 # ------------------------
-def draw_sidebar_controls(recommended_pct: float, chosen_pct: float, prisoner_salary: float):
+def draw_sidebar_controls():
     with st.sidebar:
-        st.header("Adjust Settings")
+        st.header("Controls")
 
+        # Lock overheads
         lock_overheads = st.checkbox(
-            "Lock overheads to highest instructor cost",
-            value=st.session_state.get("lock_overheads", False),
+            "Lock overheads to highest instructor salary", key="lock_overheads"
         )
-        st.session_state["lock_overheads"] = lock_overheads
 
+        # Instructor time allocation
         chosen_pct = st.slider(
-            "Adjust instructor % allocation",
-            min_value=0,
-            max_value=100,
-            value=int(chosen_pct),
-            step=1,
+            "Instructor allocation (%)", 0, 100,
+            int(st.session_state.get("chosen_pct", 100)), key="chosen_pct_sidebar"
         )
 
+        # Prisoner weekly salary
         prisoner_salary = st.slider(
-            "Prisoner labour rate (£/week)",
-            min_value=0.0,
-            max_value=50.0,
-            value=float(prisoner_salary),
-            step=0.5,
+            "Prisoner weekly salary (£)", 0, 50,
+            int(st.session_state.get("prisoner_salary", 0)), key="prisoner_salary_sidebar"
         )
 
-        return lock_overheads, chosen_pct, prisoner_salary
-
-# ------------------------
-# Backwards-compatible alias
-# ------------------------
-def draw_sidebar(*args, **kwargs):
-    """Alias so existing code calling draw_sidebar(...) still works"""
-    return draw_sidebar_controls(*args, **kwargs)
+        return {
+            "lock_overheads": lock_overheads,
+            "chosen_pct": chosen_pct,
+            "prisoner_salary": prisoner_salary,
+        }
