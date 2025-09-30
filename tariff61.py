@@ -1,7 +1,6 @@
 # tariff61.py
-# Prison -> Region map, Instructor salaries, and Band 3 shadow costs
+# Prison -> Region mapping (cleaned, no "HMP" prefixes) and Supervisor pay bands
 
-# Mapping of prisons to regions
 PRISON_TO_REGION = {
     "Altcourse": "National", "Ashfield": "National", "Askham Grange": "National",
     "Aylesbury": "National", "Bedford": "National", "Belmarsh": "Inner London",
@@ -47,25 +46,17 @@ PRISON_TO_REGION = {
     "Wormwood Scrubs": "Inner London", "Wymott": "National",
 }
 
-# Instructor pay bands (avg total annual salary)
 SUPERVISOR_PAY = {
     "Inner London": [
-        {"title": "Production Instructor: Band 3", "avg_total": 49202.70},
-        {"title": "Specialist Instructor: Band 4", "avg_total": 55632.00},
+        {"title": "Production Instructor: Band 3", "avg_total": 49203},
+        {"title": "Specialist Instructor: Band 4", "avg_total": 55632},
     ],
     "Outer London": [
-        {"title": "Production Instructor: Band 3", "avg_total": 45855.97},
-        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 69584.00},
+        {"title": "Production Instructor: Band 3", "avg_total": 45856},
+        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 69584},
     ],
     "National": [
-        {"title": "Production Instructor: Band 3", "avg_total": 42247.81},
-        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 48969.00},
+        {"title": "Production Instructor: Band 3", "avg_total": 42248},
+        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 48969},
     ],
-}
-
-# Band 3 shadow costs (annual)
-BAND3_COSTS = {
-    "Outer London": 45855.97,
-    "Inner London": 49202.70,
-    "National": 42247.81,
 }
