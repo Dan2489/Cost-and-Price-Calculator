@@ -1,9 +1,10 @@
 # newapp61.py
-# Logo-free UI shell for the Cost and Price Calculator (Instructor-based version).
-# - Host and Production (Contractual + Ad-hoc) with downloads (CSV + HTML).
-# - Contractual supports “Maximum units from capacity” and “Target units/week”.
-# - VAT: always 20% (no checkbox); always show ex VAT and inc VAT prices.
-# - Development charge does not apply to Another Government Department.
+# Instructor-based Cost and Price Calculator (no utilities).
+# - Overheads = 61% of instructor costs.
+# - If customer provides instructor → use Band 3 shadow cost for overheads only.
+# - Option to lock overheads to highest instructor cost.
+# - VAT always 20%.
+# - Same aesthetics preserved.
 
 from io import BytesIO
 from datetime import date
@@ -26,13 +27,10 @@ from host61 import generate_host_quote
 st.set_page_config(page_title="Cost and Price Calculator", page_icon="💷", layout="centered")
 inject_govuk_css()
 
-# -----------------------------------------------------------------------------
-# Header (no logo)
-# -----------------------------------------------------------------------------
 st.markdown("## Cost and Price Calculator (Instructor Costs Model)")
 
 # -----------------------------------------------------------------------------
-# Helpers: formatting + HTML export
+# Helpers
 # -----------------------------------------------------------------------------
 def _currency(v) -> str:
     try:
@@ -41,87 +39,14 @@ def _currency(v) -> str:
         return ""
 
 
-def render_host_df_to_html(host_df: pd.DataFrame) -> str:
-    rows_html = []
-    for _, row in host_df.iterrows():
-        item = str(row["Item"])
-        val = row["Amount (£)"]
-        neg_cls = ""
-        try:
-            neg_cls = " class='neg'" if float(val) < 0 else ""
-        except Exception:
-            pass
-        grand_cls = " class='grand'" if "Grand Total" in item else ""
-        rows_html.append(f"<tr{grand_cls}><td>{item}</td><td{neg_cls}>{_currency(val)}</td></tr>")
-    header = "<tr><th>Item</th><th>Amount (£)</th></tr>"
-    return f"<table>{header}{''.join(rows_html)}</table>"
-
-
-def render_generic_df_to_html(df: pd.DataFrame) -> str:
-    cols = list(df.columns)
-    thead = "<tr>" + "".join([f"<th>{c}</th>" for c in cols]) + "</tr>"
-    body_rows = []
-    for _, row in df.iterrows():
-        tds = []
-        for col in cols:
-            val = row[col]
-            if isinstance(val, (int, float)) and pd.notna(val):
-                tds.append(f"<td>{_currency(val) if '£' in col else f'{float(val):,.2f}'}</td>")
-            else:
-                tds.append(f"<td>{val}</td>")
-        body_rows.append("<tr>" + "".join(tds) + "</tr>")
-    return f"<table>{thead}{''.join(body_rows)}</table>"
-
-
 def export_csv_bytes(df: pd.DataFrame) -> BytesIO:
     b = BytesIO()
     df.to_csv(b, index=False)
     b.seek(0)
     return b
 
-
-def export_html(host_df: pd.DataFrame | None,
-                prod_df: pd.DataFrame | None,
-                title: str = "Quote") -> BytesIO:
-    css = """
-      <style>
-        body{font-family:Arial,Helvetica,sans-serif;color:#0b0c0c;}
-        table{width:100%;border-collapse:collapse;margin:12px 0;}
-        th,td{border-bottom:1px solid #b1b4b6;padding:8px;text-align:left;}
-        th{background:#f3f2f1;} td.neg{color:#d4351c;} tr.grand td{font-weight:700;}
-        h1,h2,h3{margin:0.2rem 0;}
-      </style>
-    """
-    header_html = f"<h2>{title}</h2>"
-    meta = (f"<p>Date: {date.today().isoformat()}<br/>"
-            f"Customer: {st.session_state.get('customer_name','')}<br/>"
-            f"Prison: {st.session_state.get('prison_choice','')}<br/>"
-            f"Region: {st.session_state.get('region','')}</p>")
-    parts = [css, header_html, meta]
-    if host_df is not None:
-        parts += ["<h3>Host Costs</h3>", render_host_df_to_html(host_df)]
-    if prod_df is not None:
-        section_title = "Ad-hoc Items" if "Ad-hoc" in str(title) else "Production Items"
-        parts += [f"<h3>{section_title}</h3>", render_generic_df_to_html(prod_df)]
-    parts.append("<p>Prices are indicative and may change based on final scope and site conditions.</p>")
-
-    html_doc = f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>{title}</title>
-</head>
-<body>
-{''.join(parts)}
-</body>
-</html>"""
-    b = BytesIO(html_doc.encode("utf-8"))
-    b.seek(0)
-    return b
-
-
 # -----------------------------------------------------------------------------
-# Base inputs
+# Inputs
 # -----------------------------------------------------------------------------
 prisons_sorted = ["Select"] + sorted(PRISON_TO_REGION.keys())
 prison_choice = st.selectbox("Prison Name", prisons_sorted, index=0, key="prison_choice")
@@ -132,7 +57,6 @@ customer_type = st.selectbox("I want to quote for", ["Select", "Commercial", "An
 customer_name = st.text_input("Customer Name", key="customer_name")
 workshop_mode = st.selectbox("Contract type?", ["Select", "Host", "Production"], key="workshop_mode")
 
-# Hours / staffing & instructors
 workshop_hours = st.number_input("How many hours per week is the workshop open?", min_value=0.0, format="%.2f", key="workshop_hours")
 num_prisoners   = st.number_input("How many prisoners employed?", min_value=0, step=1, key="num_prisoners")
 prisoner_salary = st.number_input("Prisoner salary per week (£)", min_value=0.0, format="%.2f", key="prisoner_salary")
@@ -166,7 +90,7 @@ else:
 # Sidebar: lock overheads option
 with st.sidebar:
     st.header("Options")
-    st.checkbox("Lock overheads against highest instructor cost", key="lock_overheads")
+    lock_overheads = st.checkbox("Lock overheads against highest instructor cost", key="lock_overheads")
 
 # Development charge (Commercial only)
 dev_rate = 0.0
@@ -203,7 +127,6 @@ def validate_inputs():
         if any(s <= 0 for s in supervisor_salaries): errors.append("Instructor Avg Total must be > 0")
     return errors
 
-
 # -----------------------------------------------------------------------------
 # MAIN
 # -----------------------------------------------------------------------------
@@ -219,6 +142,7 @@ if workshop_mode == "Host":
         effective_pct,
         customer_type,
         dev_rate,
+        lock_overheads,
     )
 elif workshop_mode == "Production":
     from production61 import run_production
@@ -231,6 +155,7 @@ elif workshop_mode == "Production":
         customer_covers_supervisors,
         customer_type,
         dev_rate,
+        lock_overheads,
     )
 
 # -----------------------------------------------------------------------------
