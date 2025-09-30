@@ -1,19 +1,15 @@
 from dataclasses import dataclass
-from typing import Optional  # 3.9-safe
+from typing import Optional
 
 @dataclass(frozen=True)
-class AppConfig:
-    FT2_TO_M2: float = 0.092903
-    DAYS_PER_MONTH: float = 365.0 / 12.0
-    FULL_UTILISATION_WEEK: float = 37.5
-    APPORTION_FIXED_ENERGY: bool = False
-    APPORTION_MAINTENANCE: bool = True
-    DEFAULT_ADMIN_MONTHLY: float = 150.0
-    GLOBAL_OUTPUT_DEFAULT: int = 100
+class AppConfig61:
+    FULL_UTILISATION_WEEK: float = 37.5   # reference week
+    GLOBAL_OUTPUT_DEFAULT: int = 100      # default output %
 
-CFG61 = AppConfig()
+CFG61 = AppConfig61()
 
 def hours_scale(hours_open_per_week: float, full_week: Optional[float] = None) -> float:
+    """Scale factor for hours relative to full week."""
     try:
         h = float(hours_open_per_week)
         f = float(full_week if full_week is not None else CFG61.FULL_UTILISATION_WEEK)
