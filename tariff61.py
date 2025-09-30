@@ -1,4 +1,6 @@
-# Prison -> Region map (kept exactly as in original)
+# tariff61.py
+# Prison -> Region mapping and Supervisor pay bands
+
 PRISON_TO_REGION = {
     "Altcourse": "National", "Ashfield": "National", "Askham Grange": "National",
     "Aylesbury": "National", "Bedford": "National", "Belmarsh": "Inner London",
@@ -44,7 +46,6 @@ PRISON_TO_REGION = {
     "Wormwood Scrubs": "Inner London", "Wymott": "National",
 }
 
-# Instructor salaries by region (annual avg totals)
 SUPERVISOR_PAY = {
     "Inner London": [
         {"title": "Production Instructor: Band 3", "avg_total": 49202.70},
@@ -52,10 +53,10 @@ SUPERVISOR_PAY = {
     ],
     "Outer London": [
         {"title": "Production Instructor: Band 3", "avg_total": 45855.97},
-        {"title": "Specialist Instructor: Band 4", "avg_total": 69584.00},
+        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 69584.00},
     ],
     "National": [
         {"title": "Production Instructor: Band 3", "avg_total": 42247.81},
-        {"title": "Specialist Instructor: Band 4", "avg_total": 48969.00},
+        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 48969.00},
     ],
 }
