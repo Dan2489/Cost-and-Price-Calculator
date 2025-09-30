@@ -1,6 +1,5 @@
 # tariff61.py
-# Prison -> Region mapping and Instructor pay bands (per region).
-# (Exactly as your original names – no "HMP" prefixes added.)
+# Prison -> Region map (NO "HMP" prefixes) and Supervisor pay bands + Band 3 shadow costs.
 
 PRISON_TO_REGION = {
     "Altcourse": "National", "Ashfield": "National", "Askham Grange": "National",
@@ -47,18 +46,24 @@ PRISON_TO_REGION = {
     "Wormwood Scrubs": "Inner London", "Wymott": "National",
 }
 
-# Titles (exact wording as you used) and avg annual totals per region
 SUPERVISOR_PAY = {
     "Inner London": [
-        {"title": "Production Instructor: Band 3", "avg_total": 49203},
-        {"title": "Specialist Instructor: Band 4", "avg_total": 55632},
+        {"title": "Production Instructor: Band 3", "avg_total": 49202.70},
+        {"title": "Specialist Instructor: Band 4", "avg_total": 55632.00},
     ],
     "Outer London": [
-        {"title": "Production Instructor: Band 3", "avg_total": 45856},
-        {"title": "Specialist Instructor: Band 4", "avg_total": 69584},
+        {"title": "Production Instructor: Band 3", "avg_total": 45855.97},
+        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 69584.00},
     ],
     "National": [
-        {"title": "Production Instructor: Band 3", "avg_total": 42248},
-        {"title": "Specialist Instructor: Band 4", "avg_total": 48969},
+        {"title": "Production Instructor: Band 3", "avg_total": 42247.81},
+        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 48969.00},
     ],
+}
+
+# Band 3 shadow costs (annual) for when the customer provides the instructor
+BAND3_COSTS = {
+    "Outer London": 45855.97,
+    "Inner London": 49202.70,
+    "National": 42247.81,
 }
