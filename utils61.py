@@ -1,8 +1,7 @@
 # utils61.py
 import streamlit as st
 
-# -------------------- TARIFF (PRISONS & INSTRUCTOR TITLES) --------------------
-# Copied exactly from your tariff.py, unchanged
+# -------------------- PRISON -> REGION (exactly as your tariff.py) --------------------
 PRISON_TO_REGION = {
     "Altcourse": "National", "Ashfield": "National", "Askham Grange": "National",
     "Aylesbury": "National", "Bedford": "National", "Belmarsh": "Inner London",
@@ -48,7 +47,7 @@ PRISON_TO_REGION = {
     "Wormwood Scrubs": "Inner London", "Wymott": "National",
 }
 
-# Only Band 3 / Band 4 titles (kept exactly as you provided)
+# -------------------- INSTRUCTOR TITLES (Band 3 & Band 4 only, exact text) --------------------
 SUPERVISOR_PAY = {
     "Inner London": [
         {"title": "Production Instructor: Band 3", "avg_total": 49203},
@@ -64,24 +63,23 @@ SUPERVISOR_PAY = {
     ],
 }
 
-# Band 3 salaries for shadow pricing (when customer provides instructor)
+# Band 3 salaries used ONLY to compute overheads when customer provides the instructor (never shown)
 BAND3_SHADOW_SALARY = {
     "Outer London": 45855.97,
     "Inner London": 49202.70,
     "National": 42247.81,
 }
 
-# ------------------------------ SIDEBAR (simple) ------------------------------
+# ------------------------------ SIDEBAR (lock toggle) ------------------------------
 def draw_sidebar_simple() -> None:
     with st.sidebar:
         st.header("Overheads")
-        st.markdown("Overheads are **61% of instructor costs**.")
+        st.caption("Overheads are **61% of instructor wage after the % allocation**.")
         st.checkbox(
             "Lock overheads to the highest instructor cost",
             key="lock_overheads",
-            help="Uses the highest selected instructor annual cost as the base for 61%, "
-                 "instead of the sum/prorated share. If customer provides the instructor, "
-                 "Band 3 (region) is used as the base."
+            help="If on, base the 61% on the highest selected instructor wage (after % allocation). "
+                 "If the customer provides the instructor, Band 3 (region) is used as the base (after % allocation)."
         )
 
 # ---------------------------------- STYLE ------------------------------------
@@ -89,14 +87,8 @@ def inject_govuk_css() -> None:
     st.markdown(
         """
         <style>
-          [data-testid="stSidebar"] {
-            min-width: 420px !important; max-width: 420px !important;
-          }
-          @media (max-width: 1200px) {
-            [data-testid="stSidebar"] {
-              min-width: 360px !important; max-width: 360px !important;
-            }
-          }
+          [data-testid="stSidebar"] { min-width: 420px !important; max-width: 420px !important; }
+          @media (max-width: 1200px) { [data-testid="stSidebar"] { min-width: 360px !important; max-width: 360px !important; } }
           :root { --govuk-green: #00703c; --govuk-yellow: #ffdd00; }
           .stButton > button {
             background: var(--govuk-green) !important; color: #fff !important;
@@ -104,14 +96,6 @@ def inject_govuk_css() -> None:
           }
           .stButton > button:hover { filter: brightness(0.95); }
           .stButton > button:focus, .stButton > button:focus-visible {
-            outline: 3px solid var(--govuk-yellow) !important; outline-offset: 0 !important;
-            box-shadow: 0 0 0 1px #000 inset !important;
-          }
-          [data-testid="stSlider"] [role="slider"] {
-            background: var(--govuk-green) !important; border: 2px solid var(--govuk-green) !important; box-shadow: none !important;
-          }
-          [data-testid="stSlider"] [role="slider"]:focus,
-          [data-testid="stSlider"] [role="slider"]:focus-visible {
             outline: 3px solid var(--govuk-yellow) !important; outline-offset: 0 !important;
             box-shadow: 0 0 0 1px #000 inset !important;
           }
