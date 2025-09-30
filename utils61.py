@@ -7,37 +7,24 @@ def inject_govuk_css() -> None:
     st.markdown(
         """
         <style>
-          [data-testid="stSidebar"] {
-            min-width: 420px !important;
-            max-width: 420px !important;
-          }
+          [data-testid="stSidebar"] { min-width: 420px !important; max-width: 420px !important; }
           @media (max-width: 1200px) {
-            [data-testid="stSidebar"] {
-              min-width: 360px !important;
-              max-width: 360px !important;
-            }
+            [data-testid="stSidebar"] { min-width: 360px !important; max-width: 360px !important; }
           }
-          :root {
-            --govuk-green: #00703c;
-            --govuk-yellow: #ffdd00;
-          }
+          :root { --govuk-green:#00703c; --govuk-yellow:#ffdd00; }
           .stButton > button {
-            background: var(--govuk-green) !important;
-            color: #fff !important;
-            border: 2px solid transparent !important;
-            border-radius: 0 !important;
-            font-weight: 600;
+            background: var(--govuk-green) !important; color: #fff !important;
+            border: 2px solid transparent !important; border-radius: 0 !important; font-weight: 600;
           }
           .stButton > button:hover { filter: brightness(0.95); }
           .stButton > button:focus, .stButton > button:focus-visible {
-            outline: 3px solid var(--govuk-yellow) !important;
-            outline-offset: 0 !important;
+            outline: 3px solid var(--govuk-yellow) !important; outline-offset: 0 !important;
             box-shadow: 0 0 0 1px #000 inset !important;
           }
-          table { width:100%; border-collapse: collapse; margin: 12px 0; }
-          th, td { border-bottom: 1px solid #b1b4b6; padding: 8px; text-align: left; }
-          th { background: #f3f2f1; }
-          td.neg { color: #d4351c; }
+          table { width:100%; border-collapse:collapse; margin: 12px 0; }
+          th,td { border-bottom:1px solid #b1b4b6; padding:8px; text-align:left; }
+          th { background:#f3f2f1; }
+          td.neg { color:#d4351c; }
           tr.grand td { font-weight: 700; }
         </style>
         """,
@@ -45,7 +32,7 @@ def inject_govuk_css() -> None:
     )
 
 # ------------------------
-# Prison → Region mapping
+# Prison → Region mapping (no "HMP" prefixes)
 # ------------------------
 PRISON_TO_REGION = {
     "Altcourse": "National", "Ashfield": "National", "Askham Grange": "National",
@@ -93,7 +80,7 @@ PRISON_TO_REGION = {
 }
 
 # ------------------------
-# Instructor pay bands
+# Instructor pay bands (only Band 3 + Band 4 titles)
 # ------------------------
 SUPERVISOR_PAY = {
     "Inner London": [
@@ -111,31 +98,28 @@ SUPERVISOR_PAY = {
 }
 
 # ------------------------
-# Sidebar controls
+# Sidebar controls (exactly 3 controls)
 # ------------------------
-def draw_sidebar_controls():
+def draw_sidebar(recommended_pct: float, chosen_pct: float, prisoner_salary: float):
     with st.sidebar:
         st.header("Controls")
 
-        # Lock overheads
         lock_overheads = st.checkbox(
-            "Lock overheads to highest instructor salary", key="lock_overheads"
+            "Lock overheads to highest instructor salary",
+            value=bool(st.session_state.get("lock_overheads", False)),
+            key="lock_overheads"
         )
 
-        # Instructor time allocation
         chosen_pct = st.slider(
-            "Instructor allocation (%)", 0, 100,
-            int(st.session_state.get("chosen_pct", 100)), key="chosen_pct_sidebar"
+            "Instructor allocation (%)",
+            0, 100, int(chosen_pct),
+            key="chosen_pct"
         )
 
-        # Prisoner weekly salary
         prisoner_salary = st.slider(
-            "Prisoner weekly salary (£)", 0, 50,
-            int(st.session_state.get("prisoner_salary", 0)), key="prisoner_salary_sidebar"
+            "Prisoner weekly salary (£)",
+            0, 500, int(prisoner_salary) if prisoner_salary is not None else 0,
+            key="prisoner_salary_slider"
         )
 
-        return {
-            "lock_overheads": lock_overheads,
-            "chosen_pct": chosen_pct,
-            "prisoner_salary": prisoner_salary,
-        }
+        return lock_overheads, chosen_pct, float(prisoner_salary)
