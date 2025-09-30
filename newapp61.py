@@ -1,90 +1,110 @@
-# newapp61.py
-# Cost and Price Calculator (corrected: no "HMP" prefixes, no stray locks)
-
-from io import BytesIO
-from datetime import date
-import pandas as pd
 import streamlit as st
+import pandas as pd
 
 from config61 import CFG
-from utils61 import inject_govuk_css, PRISON_TO_REGION, SUPERVISOR_PAY, draw_sidebar
-from production61 import (
-    labour_minutes_budget,
-    calculate_production_contractual,
-    calculate_adhoc,
-)
 from host61 import generate_host_quote
+from production61 import calculate_production_contractual
+from utils61 import inject_govuk_css, PRISON_TO_REGION, SUPERVISOR_PAY, draw_sidebar
 
-# -----------------------------------------------------------------------------
-# Page config + CSS
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="Cost and Price Calculator", page_icon="💷", layout="centered")
+# ------------------------------------------------------
+# App setup
+# ------------------------------------------------------
+st.set_page_config(page_title="Cost and Price Calculator (Instructor Cost Model)", layout="wide")
 inject_govuk_css()
 
-# -----------------------------------------------------------------------------
-# Header
-# -----------------------------------------------------------------------------
-st.markdown("## Cost and Price Calculator")
-
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-def _currency(v) -> str:
-    try:
-        return f"£{float(v):,.2f}"
-    except Exception:
-        return ""
-
-def render_host_df_to_html(host_df: pd.DataFrame) -> str:
-    rows_html = []
-    for _, row in host_df.iterrows():
-        item = str(row["Item"])
-        val = row["Amount (£)"]
-        neg_cls = ""
-        try:
-            neg_cls = " class='neg'" if float(val) < 0 else ""
-        except Exception:
-            pass
-        grand_cls = " class='grand'" if "Grand Total" in item else ""
-        rows_html.append(f"<tr{grand_cls}><td>{item}</td><td{neg_cls}>{_currency(val)}</td></tr>")
-    header = "<tr><th>Item</th><th>Amount (£)</th></tr>"
-    return f"<table>{header}{''.join(rows_html)}</table>"
-
-def render_generic_df_to_html(df: pd.DataFrame) -> str:
-    cols = list(df.columns)
-    thead = "<tr>" + "".join([f"<th>{c}</th>" for c in cols]) + "</tr>"
-    body_rows = []
-    for _, row in df.iterrows():
-        tds = []
-        for col in cols:
-            val = row[col]
-            if isinstance(val, (int, float)) and pd.notna(val):
-                tds.append(f"<td>{_currency(val) if '£' in col else f'{float(val):,.2f}'}</td>")
-            else:
-                tds.append(f"<td>{val}</td>")
-        body_rows.append("<tr>" + "".join(tds) + "</tr>")
-    return f"<table>{thead}{''.join(body_rows)}</table>"
-
-def export_csv_bytes(df: pd.DataFrame) -> BytesIO:
-    b = BytesIO()
-    df.to_csv(b, index=False)
-    b.seek(0)
-    return b
-
-# -----------------------------------------------------------------------------
-# Inputs
-# -----------------------------------------------------------------------------
-prisons_sorted = ["Select"] + sorted(PRISON_TO_REGION.keys())  # <- no "HMP" prefixes
-prison_choice = st.selectbox("Prison Name", prisons_sorted, index=0, key="prison_choice")
-region = PRISON_TO_REGION.get(prison_choice, "Select") if prison_choice != "Select" else "Select"
-st.session_state["region"] = region
-
-customer_type = st.selectbox("I want to quote for", ["Select", "Commercial", "Another Government Department"], key="customer_type")
-customer_name = st.text_input("Customer Name", key="customer_name")
-workshop_mode = st.selectbox("Contract type?", ["Select", "Host", "Production"], key="workshop_mode")
+st.markdown(
+    '<div class="app-header"><h1 class="govuk-heading-l">Cost and Price Calculator (Instructor Cost Model)</h1></div>',
+    unsafe_allow_html=True,
+)
 
 # Sidebar
-USAGE_KEY = "low"
-draw_sidebar(USAGE_KEY)
+draw_sidebar()
 
-# (rest of your logic follows unchanged — Host, Production, Ad-hoc etc.)
+# ------------------------------------------------------
+# Inputs
+# ------------------------------------------------------
+prison_name = st.selectbox("Prison Name", ["Select"] + sorted(PRISON_TO_REGION.keys()))
+customer_name = st.text_input("Customer Name")
+contract_type = st.selectbox("Contract type?", ["Select", "Commercial", "Public"])
+
+workshop_hours = st.number_input("How many hours per week is the workshop open?", min_value=0.0, step=0.25)
+num_prisoners = st.number_input("How many prisoners employed?", min_value=0, step=1)
+prisoner_salary = st.number_input("Prisoner salary per week (£)", min_value=0.0, step=1.0)
+
+num_instructors = st.number_input("How many instructors?", min_value=0, step=1)
+customer_covers_instructors = st.checkbox("Customer provides instructor(s)?")
+
+effective_pct = st.slider("Adjust instructor % allocation", min_value=0, max_value=100, value=100)
+
+apply_vat = True
+vat_rate = 20.0
+dev_rate = 0.0
+
+# ------------------------------------------------------
+# Logic
+# ------------------------------------------------------
+def get_instructor_and_overheads(region: str, num_instructors: int, pct: float, customer_covers: bool):
+    """
+    Returns (instructor_cost, overheads_cost) depending on whether the customer
+    provides the instructor(s).
+    """
+    if customer_covers:
+        # Shadow cost: Band 3 only (salary not shown, only used for overheads)
+        band3 = next((s for s in SUPERVISOR_PAY[region] if "Band 3" in s["title"]), None)
+        if not band3:
+            raise ValueError(f"No Band 3 salary found for region {region}")
+        shadow_salary = band3["avg_total"]
+        instructor_cost = 0.0
+        overheads = 0.61 * shadow_salary
+    else:
+        # Real instructor salary, adjusted by allocation %
+        total_salary = 0.0
+        for region_pay in SUPERVISOR_PAY[region]:
+            if "Band 3" in region_pay["title"] or "Band 4" in region_pay["title"]:
+                # For simplicity, take the first selected type from sidebar selection later
+                pass
+        # Here, assume user always selects Band from region list in real app
+        # For now just pick Band 3
+        band3 = next((s for s in SUPERVISOR_PAY[region] if "Band 3" in s["title"]), None)
+        if not band3:
+            raise ValueError(f"No Band 3 salary found for region {region}")
+        adj_salary = (band3["avg_total"] * (pct / 100.0)) * num_instructors
+        instructor_cost = adj_salary
+        overheads = 0.61 * adj_salary
+    return instructor_cost, overheads
+
+
+if st.button("Generate Costs"):
+    if prison_name == "Select" or contract_type == "Select":
+        st.error("Please select a valid prison and contract type.")
+    else:
+        region = PRISON_TO_REGION[prison_name]
+
+        instructor_cost, overheads = get_instructor_and_overheads(
+            region, num_instructors, effective_pct, customer_covers_instructors
+        )
+
+        prisoner_monthly = num_prisoners * prisoner_salary * (52.0 / 12.0)
+        instructor_monthly = instructor_cost / 12.0
+        overheads_monthly = overheads / 12.0
+
+        subtotal = prisoner_monthly + instructor_monthly + overheads_monthly
+        vat_amount = subtotal * (vat_rate / 100.0)
+        grand_total = subtotal + vat_amount
+
+        breakdown = [
+            ("Prisoner wages", prisoner_monthly),
+        ]
+        if instructor_cost > 0:
+            breakdown.append(("Instructors", instructor_monthly))
+        breakdown.append(("Overheads (61%)", overheads_monthly))
+
+        breakdown += [
+            ("Subtotal", subtotal),
+            (f"VAT ({vat_rate:.1f}%)", vat_amount),
+            ("Grand Total (£/month)", grand_total),
+        ]
+
+        df = pd.DataFrame(breakdown, columns=["Item", "Amount (£)"])
+        st.subheader("Monthly Breakdown")
+        st.table(df)
