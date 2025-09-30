@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import datetime as dt
 
-from config61 import CFG
+import config61
+CFG = config61.CFG
 from utils61 import inject_govuk_css, fmt_currency, render_sidebar
 from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from host61 import generate_host_quote
