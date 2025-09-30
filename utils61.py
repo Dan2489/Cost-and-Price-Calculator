@@ -1,7 +1,7 @@
 # utils61.py
 import streamlit as st
 
-# Inject GOV.UK styling
+# ---------- CSS Styling ----------
 def inject_govuk_css() -> None:
     st.markdown(
         """
@@ -65,39 +65,38 @@ def inject_govuk_css() -> None:
         unsafe_allow_html=True
     )
 
-# Sidebar controls
-def draw_sidebar() -> dict:
-    ctx = {}
+# ---------- Currency Formatting ----------
+def fmt_currency(v: float) -> str:
+    if v is None:
+        return "-"
+    return f"£{v:,.2f}"
 
+# ---------- Sidebar ----------
+def draw_sidebar(default_output_pct: int = 100) -> None:
     with st.sidebar:
-        st.header("Controls")
+        st.header("Settings")
 
-        # Overhead lock
-        ctx["lock_overheads"] = st.checkbox(
-            "Lock overheads to highest instructor salary",
-            value=False,
-            key="lock_overheads"
-        )
+        # Lock overheads
+        st.checkbox("Lock overheads to highest instructor salary", key="lock_overheads")
 
         # Instructor allocation slider
-        ctx["instructor_allocation"] = st.slider(
-            "Instructor allocation %", 0, 100, 100,
-            help="Adjust what % of the instructor salary is apportioned",
-            key="instructor_allocation"
+        st.slider(
+            "Instructor allocation (%)",
+            min_value=0,
+            max_value=100,
+            value=100,
+            step=5,
+            key="effective_pct",
+            help="Adjust percentage of instructor salary allocated to this workshop",
         )
 
-        # Prisoner output slider
-        ctx["prisoner_output"] = st.slider(
-            "Prisoner output %", 0, 100, 100,
-            help="Scale prisoner productivity in production calculations",
-            key="prisoner_output"
+        # Prisoner labour output slider
+        st.slider(
+            "Prisoner output (%)",
+            min_value=10,
+            max_value=100,
+            value=default_output_pct,
+            step=5,
+            key="output_pct",
+            help="Adjust effective prisoner productivity compared to full output",
         )
-
-    return ctx
-
-# Formatting helper
-def currency(v) -> str:
-    try:
-        return f"£{float(v):,.2f}"
-    except Exception:
-        return ""
