@@ -1,6 +1,12 @@
 from typing import List, Dict, Tuple
 import pandas as pd
-import streamlit as st
+
+# Band 3 shadow costs (annual)
+BAND3_COSTS = {
+    "Outer London": 45855.97,
+    "Inner London": 49202.70,
+    "National": 42247.81,
+}
 
 def generate_host_quote(
     *,
@@ -10,56 +16,47 @@ def generate_host_quote(
     customer_covers_supervisors: bool,
     supervisor_salaries: List[float],
     effective_pct: float,
+    region: str,
     customer_type: str,
-    apply_vat: bool,
     vat_rate: float,
-    dev_rate: float,  # not used directly anymore, replaced by support logic
+    dev_rate: float,
+    lock_overheads: bool = False
 ) -> Tuple[pd.DataFrame, Dict]:
     breakdown: Dict[str, float] = {}
-
-    # Prisoner wages
     breakdown["Prisoner wages"] = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
 
-    # Instructor salaries (monthly, adjusted by allocation %)
-    instructor_cost = 0.0
+    # Instructor costs
     if not customer_covers_supervisors:
-        instructor_cost = sum((s / 12.0) * (float(effective_pct) / 100.0) for s in supervisor_salaries)
-    breakdown["Instructors"] = instructor_cost
+        instructor_cost = sum((s / 12.0) * (effective_pct / 100.0) for s in supervisor_salaries)
+        breakdown["Instructors"] = instructor_cost
+    else:
+        instructor_cost = 0.0
 
-    # --- Development charge ---
-    dev_base = instructor_cost * 0.20
-    dev_reduction = 0.0
+    # Determine overhead base
+    if customer_covers_supervisors:
+        shadow = BAND3_COSTS.get(region, 42247.81)  # default National
+        overhead_base = (shadow / 12.0) * (effective_pct / 100.0)
+    else:
+        overhead_base = instructor_cost
+
+    if lock_overheads and supervisor_salaries:
+        overhead_base = (max(supervisor_salaries) / 12.0) * (effective_pct / 100.0)
+
+    breakdown["Overheads (61%)"] = overhead_base * 0.61
+
+    # Development charge
+    dev_charge = 0.0
     if customer_type == "Commercial":
-        support = st.session_state.get("support", "None")
-        if support == "Employment on release/RoTL":
-            dev_reduction = instructor_cost * 0.10
-        elif support == "Post release":
-            dev_reduction = instructor_cost * 0.10
-        elif support == "Both":
-            dev_reduction = instructor_cost * 0.20
-    dev_final = max(0.0, dev_base - dev_reduction)
+        dev_charge = breakdown["Overheads (61%)"] * dev_rate
+        breakdown["Development charge"] = dev_charge
 
-    breakdown["Development charge (20%)"] = dev_base
-    if dev_reduction > 0:
-        breakdown["Reduction applied"] = -dev_reduction
-    breakdown["Revised Development charge"] = dev_final
-
-    # Subtotal / VAT / Grand total
-    subtotal = sum(v for v in breakdown.values())
-    vat_amount = subtotal * (float(vat_rate) / 100.0)
+    subtotal = sum(breakdown.values())
+    vat_amount = subtotal * (vat_rate / 100.0)
     grand_total = subtotal + vat_amount
 
-    # Build rows for DataFrame
-    rows = []
-    for item, val in breakdown.items():
-        if item == "Reduction applied":
-            rows.append((item, val))  # show as negative (red in HTML later)
-        else:
-            rows.append((item, val))
-
-    rows += [
+    rows = list(breakdown.items()) + [
         ("Subtotal", subtotal),
-        (f"VAT ({float(vat_rate):.1f}%)", vat_amount),
+        (f"VAT ({vat_rate:.1f}%)", vat_amount),
         ("Grand Total (£/month)", grand_total),
     ]
     host_df = pd.DataFrame(rows, columns=["Item", "Amount (£)"])
