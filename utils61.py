@@ -1,6 +1,7 @@
+# utils61.py
 import streamlit as st
 
-# ---------- Styling ----------
+# Inject GOV.UK styling
 def inject_govuk_css() -> None:
     st.markdown(
         """
@@ -15,10 +16,12 @@ def inject_govuk_css() -> None:
               max-width: 360px !important;
             }
           }
+
           :root {
             --govuk-green: #00703c;
             --govuk-yellow: #ffdd00;
           }
+
           .stButton > button {
             background: var(--govuk-green) !important;
             color: #fff !important;
@@ -32,6 +35,26 @@ def inject_govuk_css() -> None:
             outline-offset: 0 !important;
             box-shadow: 0 0 0 1px #000 inset !important;
           }
+
+          [data-testid="stSlider"] [role="slider"] {
+            background: var(--govuk-green) !important;
+            border: 2px solid var(--govuk-green) !important;
+            box-shadow: none !important;
+          }
+          [data-testid="stSlider"] [role="slider"]:focus,
+          [data-testid="stSlider"] [role="slider"]:focus-visible {
+            outline: 3px solid var(--govuk-yellow) !important;
+            outline-offset: 0 !important;
+            box-shadow: 0 0 0 1px #000 inset !important;
+          }
+          [data-testid="stSlider"] div[aria-hidden="true"] > div > div {
+            background-color: var(--govuk-green) !important;
+          }
+
+          .govuk-heading-l { font-weight: 700; font-size: 1.75rem; line-height: 1.2; }
+          .app-header { display:flex; align-items:center; gap:12px; margin: 0.25rem 0 0.75rem 0; }
+          .app-header .app-logo { height: 56px; width: auto; display:block; }
+
           table { width:100%; border-collapse: collapse; margin: 12px 0; }
           th, td { border-bottom: 1px solid #b1b4b6; padding: 8px; text-align: left; }
           th { background: #f3f2f1; }
@@ -42,30 +65,39 @@ def inject_govuk_css() -> None:
         unsafe_allow_html=True
     )
 
-# ---------- Sidebar Controls ----------
-def draw_sidebar(default_output: int = 100):
-    with st.sidebar:
-        st.header("Workshop Settings")
+# Sidebar controls
+def draw_sidebar() -> dict:
+    ctx = {}
 
-        # Lock overheads toggle
-        st.checkbox("Lock overheads to highest instructor salary", key="lock_overheads")
+    with st.sidebar:
+        st.header("Controls")
+
+        # Overhead lock
+        ctx["lock_overheads"] = st.checkbox(
+            "Lock overheads to highest instructor salary",
+            value=False,
+            key="lock_overheads"
+        )
 
         # Instructor allocation slider
-        st.slider(
-            "Instructor % allocation",
-            min_value=0,
-            max_value=100,
-            value=100,
-            step=1,
-            key="chosen_pct"
+        ctx["instructor_allocation"] = st.slider(
+            "Instructor allocation %", 0, 100, 100,
+            help="Adjust what % of the instructor salary is apportioned",
+            key="instructor_allocation"
         )
 
-        # Prisoner labour output slider
-        st.slider(
-            "Planned Output (%)",
-            min_value=0,
-            max_value=100,
-            value=default_output,
-            step=1,
-            key="planned_output_pct"
+        # Prisoner output slider
+        ctx["prisoner_output"] = st.slider(
+            "Prisoner output %", 0, 100, 100,
+            help="Scale prisoner productivity in production calculations",
+            key="prisoner_output"
         )
+
+    return ctx
+
+# Formatting helper
+def currency(v) -> str:
+    try:
+        return f"£{float(v):,.2f}"
+    except Exception:
+        return ""
