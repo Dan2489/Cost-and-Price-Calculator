@@ -1,167 +1,160 @@
 # newapp61.py
-import pandas as pd
 import streamlit as st
-from io import BytesIO
+import pandas as pd
+from config61 import CFG
+from utils61 import inject_govuk_css, draw_sidebar, fmt_currency
+from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
+from host61 import generate_host_quote
+from production61 import calculate_production_contractual, calculate_adhoc
 from datetime import date
 
-from config61 import CFG
-from utils61 import inject_govuk_css, draw_sidebar, currency
-from host61 import generate_host_quote
-from production61 import labour_minutes_budget, calculate_production_contractual, calculate_adhoc
-from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY   # <-- imported here
-
-# -----------------------------------------------------------------------------
-# Page config
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="Cost and Price Calculator", page_icon="💷", layout="centered")
+# ----- UI Setup -----
+st.set_page_config(page_title="Cost and Price Calculator", layout="wide")
 inject_govuk_css()
-st.markdown("## Cost and Price Calculator")
+draw_sidebar(default_output_pct=CFG.GLOBAL_OUTPUT_DEFAULT)
 
-# -----------------------------------------------------------------------------
-# Sidebar
-# -----------------------------------------------------------------------------
-sidebar_ctx = draw_sidebar()
+st.title("Cost and Price Calculator")
 
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-def export_csv_bytes(df: pd.DataFrame) -> BytesIO:
-    b = BytesIO()
-    df.to_csv(b, index=False)
-    b.seek(0)
-    return b
-
-# -----------------------------------------------------------------------------
-# Main Form
-# -----------------------------------------------------------------------------
+# ----- Form -----
 with st.form("main_form"):
-    prison_choice = st.selectbox("Prison Name", ["Select"] + sorted(PRISON_TO_REGION.keys()), index=0)
-    region = PRISON_TO_REGION.get(prison_choice, "National") if prison_choice != "Select" else "Select"
+    # Prison name
+    prison_name = st.selectbox("Prison name", [""] + sorted(PRISON_TO_REGION.keys()))
+    region = PRISON_TO_REGION.get(prison_name, None)
 
-    customer_name = st.text_input("Customer Name")
-    workshop_mode = st.selectbox("Contract type?", ["Select", "Host", "Production"])
+    # Customer name
+    customer_name = st.text_input("Customer name")
 
-    workshop_hours = st.number_input("How many hours is the workshop open per week?", min_value=0.0, step=0.5)
-    num_prisoners = st.number_input("How many prisoners employed per week?", min_value=0, step=1)
-    prisoner_salary = st.number_input("Average prisoner salary per week (£)", min_value=0.0, step=1.0)
+    # Contract type
+    contract_type = st.radio("Contract type", ["", "Host", "Production"], index=0)
 
-    num_supervisors = st.number_input("How many instructors?", min_value=0, step=1)
-    customer_covers_supervisors = st.checkbox("Customer provides instructor(s)?")
+    # Common questions
+    workshop_hours = st.number_input("How many hours is the workshop open per week?", min_value=0.0, value=0.0)
+    num_prisoners = st.number_input("How many prisoners employed per week?", min_value=0, value=0)
+    prisoner_salary = st.number_input("Average prisoner salary per week (£)", min_value=0.0, value=0.0)
+
+    num_supervisors = st.number_input("How many instructors?", min_value=0, value=0, step=1)
 
     supervisor_salaries = []
-    if not customer_covers_supervisors and region != "Select" and num_supervisors > 0:
-        for i in range(int(num_supervisors)):
-            options = [t["title"] for t in SUPERVISOR_PAY[region]]
-            sel = st.selectbox(f"Instructor {i+1} title", options, key=f"inst_title_{i}")
-            pay = next(t["avg_total"] for t in SUPERVISOR_PAY[region] if t["title"] == sel)
-            st.caption(f"Avg Total for {region}: **£{pay:,.0f}** per year")
-            supervisor_salaries.append(float(pay))
+    if num_supervisors > 0 and region:
+        for i in range(num_supervisors):
+            titles = [x["title"] for x in SUPERVISOR_PAY[region]]
+            sel_title = st.selectbox(f"Instructor {i+1} title", [""] + titles, key=f"inst_{i}")
+            if sel_title:
+                sel_salary = next(x["avg_total"] for x in SUPERVISOR_PAY[region] if x["title"] == sel_title)
+                st.caption(f"Region: {region} — Salary: £{sel_salary:,.2f}")
+                supervisor_salaries.append(sel_salary)
 
-    contracts = st.number_input("How many contracts do they oversee in this workshop?", min_value=1, step=1)
-    recommended_pct = round((workshop_hours / CFG.FULL_UTILISATION_WEEK) * (1 / contracts) * 100, 1) if contracts else 100
+    num_contracts = st.number_input("How many contracts do they oversee in this workshop?", min_value=1, value=1)
 
-    customer_type = st.selectbox("I want to quote for", ["Select", "Commercial", "Another Government Department"])
-    support = st.selectbox(
-        "Customer employment support?",
-        ["None", "Employment on release/RoTL", "Post release", "Both"],
-    )
-    if support == "None":
-        dev_rate = 0.20
-    elif support in ("Employment on release/RoTL", "Post release"):
-        dev_rate = 0.10
-    else:
-        dev_rate = 0.00
-
-    submitted = st.form_submit_button("Continue")
-
-# -----------------------------------------------------------------------------
-# Host Mode
-# -----------------------------------------------------------------------------
-if submitted and workshop_mode == "Host":
-    host_df, ctx = generate_host_quote(
-        num_prisoners=int(num_prisoners),
-        prisoner_salary=float(prisoner_salary),
-        num_supervisors=int(num_supervisors),
-        customer_covers_supervisors=bool(customer_covers_supervisors),
-        supervisor_salaries=supervisor_salaries,
-        effective_pct=float(sidebar_ctx["instructor_allocation"]),
-        region=region,
-        customer_type=customer_type,
-        dev_rate=dev_rate,
-        lock_overheads=sidebar_ctx["lock_overheads"],
+    customer_support = st.multiselect(
+        "What employment support does the customer offer?",
+        ["Employment on release / ROTL", "Post release"],
     )
 
-    st.markdown("### Host Costs")
-    st.table(host_df)
-    st.download_button("Download CSV (Host)", data=export_csv_bytes(host_df), file_name="host_quote.csv", mime="text/csv")
+    submitted = st.form_submit_button("Generate costs")
 
-# -----------------------------------------------------------------------------
-# Production Mode
-# -----------------------------------------------------------------------------
-if submitted and workshop_mode == "Production":
-    st.markdown("### Production settings")
+# ----- Logic -----
+if submitted and region and contract_type:
+    effective_pct = st.session_state.get("effective_pct", 100)
+    output_pct = st.session_state.get("output_pct", CFG.GLOBAL_OUTPUT_DEFAULT)
+    lock_overheads = st.session_state.get("lock_overheads", False)
 
-    planned_output_pct = sidebar_ctx["prisoner_output"]
+    # Development charge %
+    dev_rate = 0.20
+    if "Employment on release / ROTL" in customer_support:
+        dev_rate -= 0.10
+    if "Post release" in customer_support:
+        dev_rate -= 0.10
+    dev_rate = max(dev_rate, 0.0)
 
-    prod_type = st.radio(
-        "Do you want ad-hoc costs with a deadline, or contractual work?",
-        ["Contractual work", "Ad-hoc costs (multiple lines) with deadlines"],
-        index=0,
-    )
-
-    if prod_type == "Contractual work":
-        pricing_mode_label = st.radio(
-            "Price based on:",
-            ["Maximum units from capacity", "Target units per week"],
-            index=0,
-        )
-        pricing_mode = "as-is" if pricing_mode_label.startswith("Maximum") else "target"
-
-        budget_minutes_raw = labour_minutes_budget(int(num_prisoners), float(workshop_hours))
-        budget_minutes_planned = budget_minutes_raw * (planned_output_pct / 100.0)
-        st.markdown(f"**Planned available Labour minutes @ {planned_output_pct}%:** {budget_minutes_planned:,.0f}")
-
-        num_items = st.number_input("Number of items produced?", min_value=1, value=1, step=1)
-        items, targets = [], []
-        for i in range(int(num_items)):
-            with st.expander(f"Item {i+1} details", expanded=(i == 0)):
-                name = st.text_input(f"Item {i+1} Name", key=f"name_{i}")
-                disp = name.strip() or f"Item {i+1}"
-                required = st.number_input(f"Prisoners required to make 1 item ({disp})", min_value=1, value=1, step=1, key=f"req_{i}")
-                minutes_per = st.number_input(f"How many minutes to make 1 item ({disp})", min_value=1.0, value=10.0, step=1.0, key=f"mins_{i}")
-                assigned = st.number_input(
-                    f"How many prisoners work solely on this item ({disp})",
-                    min_value=0, max_value=int(num_prisoners), step=1, key=f"assigned_{i}"
-                )
-
-                cap_100 = (assigned * workshop_hours * 60.0) / (minutes_per * required) if assigned and minutes_per else 0
-                cap_planned = cap_100 * (planned_output_pct / 100.0)
-                st.caption(f"{disp} capacity @ 100%: {cap_100:.0f} units/week · @ {planned_output_pct}%: {cap_planned:.0f}")
-
-                if pricing_mode == "target":
-                    tgt_default = int(round(cap_planned)) if cap_planned > 0 else 0
-                    tgt = st.number_input(f"Target units per week ({disp})", min_value=0, value=tgt_default, step=1, key=f"target_{i}")
-                    targets.append(int(tgt))
-
-                items.append({"name": name, "required": int(required), "minutes": float(minutes_per), "assigned": int(assigned)})
-
-        results = calculate_production_contractual(
-            items, planned_output_pct,
-            workshop_hours=float(workshop_hours),
-            prisoner_salary=float(prisoner_salary),
+    if contract_type == "Host":
+        host_df, ctx = generate_host_quote(
+            num_prisoners=num_prisoners,
+            prisoner_salary=prisoner_salary,
+            num_supervisors=num_supervisors,
+            customer_covers_supervisors=(num_supervisors == 0),
             supervisor_salaries=supervisor_salaries,
-            effective_pct=float(sidebar_ctx["instructor_allocation"]),
-            customer_covers_supervisors=bool(customer_covers_supervisors),
+            effective_pct=effective_pct,
             region=region,
-            customer_type=customer_type,
+            customer_type="Commercial" if customer_name else "Government",
             dev_rate=dev_rate,
-            pricing_mode=pricing_mode,
-            targets=targets if pricing_mode == "target" else None,
-            lock_overheads=sidebar_ctx["lock_overheads"],
         )
 
-        st.markdown("### Production Results")
-        st.dataframe(pd.DataFrame(results))
+        st.subheader("Host Monthly Costs")
+        st.table(host_df.style.format({"Amount (£)": fmt_currency}))
 
-    else:  # Ad-hoc
-        st.write("Ad-hoc logic would go here (calculate_adhoc).")
+        if "Development charge (applied)" in host_df["Item"].values:
+            base = ctx["overheads_monthly"] * 0.20
+            reductions = base - ctx["dev_charge"]
+            if reductions > 0:
+                st.markdown(f"<span style='color:red'>Reductions applied: {fmt_currency(reductions)}</span>", unsafe_allow_html=True)
+                st.markdown(f"**Revised Development charge: {fmt_currency(ctx['dev_charge'])}**")
+
+    elif contract_type == "Production":
+        mode = st.radio("Production type", ["", "Contractual", "Ad-hoc"], index=0)
+        if mode == "Contractual":
+            pricing_mode = st.radio("Would you like a price for:", ["Maximum output", "Targeted output"])
+            items = []
+            num_items = st.number_input("How many different products?", min_value=1, value=1, step=1)
+            for i in range(num_items):
+                name = st.text_input(f"Item {i+1} name", "")
+                minutes = st.number_input(f"Minutes per unit (Item {i+1})", min_value=0.0, value=0.0)
+                required = st.number_input(f"Prisoners required per unit (Item {i+1})", min_value=1, value=1)
+                assigned = st.number_input(f"Prisoners assigned to Item {i+1}", min_value=0, value=0)
+                items.append({"name": name, "minutes": minutes, "required": required, "assigned": assigned})
+
+            targets = None
+            if pricing_mode == "Targeted output":
+                targets = []
+                for i in range(num_items):
+                    tgt = st.number_input(f"Target units per week for Item {i+1}", min_value=0, value=0)
+                    targets.append(tgt)
+
+            if st.form_submit_button("Generate production costs"):
+                results = calculate_production_contractual(
+                    items,
+                    output_pct,
+                    workshop_hours=workshop_hours,
+                    prisoner_salary=prisoner_salary,
+                    supervisor_salaries=supervisor_salaries,
+                    effective_pct=effective_pct,
+                    customer_covers_supervisors=(num_supervisors == 0),
+                    region=region,
+                    customer_type="Commercial" if customer_name else "Government",
+                    dev_rate=dev_rate,
+                    pricing_mode="target" if pricing_mode == "Targeted output" else "as-is",
+                    targets=targets,
+                    lock_overheads=lock_overheads,
+                )
+                st.subheader("Production Contractual Costs")
+                st.dataframe(pd.DataFrame(results).style.format(fmt_currency, subset=[c for c in pd.DataFrame(results).columns if "£" in c]))
+
+        elif mode == "Ad-hoc":
+            lines = []
+            num_lines = st.number_input("How many ad-hoc jobs?", min_value=1, value=1, step=1)
+            for i in range(num_lines):
+                name = st.text_input(f"Job {i+1} name", "")
+                mins_per_item = st.number_input(f"Minutes per unit (Job {i+1})", min_value=0.0, value=0.0)
+                pris_per_item = st.number_input(f"Prisoners per unit (Job {i+1})", min_value=1, value=1)
+                units = st.number_input(f"Units required (Job {i+1})", min_value=0, value=0)
+                deadline = st.date_input(f"Deadline (Job {i+1})", value=date.today())
+                lines.append({"name": name, "mins_per_item": mins_per_item, "pris_per_item": pris_per_item, "units": units, "deadline": deadline})
+
+            if st.form_submit_button("Generate ad-hoc costs"):
+                results = calculate_adhoc(
+                    lines,
+                    output_pct,
+                    workshop_hours=workshop_hours,
+                    num_prisoners=num_prisoners,
+                    prisoner_salary=prisoner_salary,
+                    supervisor_salaries=supervisor_salaries,
+                    effective_pct=effective_pct,
+                    customer_covers_supervisors=(num_supervisors == 0),
+                    region=region,
+                    customer_type="Commercial" if customer_name else "Government",
+                    dev_rate=dev_rate,
+                    today=date.today(),
+                    lock_overheads=lock_overheads,
+                )
+                st.subheader("Production Ad-hoc Costs")
+                st.json(results)
