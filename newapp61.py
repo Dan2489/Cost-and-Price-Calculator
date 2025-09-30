@@ -1,53 +1,43 @@
 # newapp61.py
-# Instructor-based Cost and Price Calculator (no utilities).
-# - Overheads = 61% of instructor costs.
-# - If customer provides instructor → use Band 3 shadow cost for overheads only.
-# - Option to lock overheads to highest instructor cost.
-# - VAT always 20%.
-# - Same aesthetics preserved.
-
+# Streamlit app using instructor-only overheads model (no utilities).
 from io import BytesIO
 from datetime import date
 import pandas as pd
 import streamlit as st
 
 from config61 import CFG
-from style61 import inject_govuk_css
-from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
-from production61 import (
-    labour_minutes_budget,
-    calculate_production_contractual,
-    calculate_adhoc,
-)
+from utils61 import inject_govuk_css, draw_sidebar_simple, PRISON_TO_REGION, SUPERVISOR_PAY
+from production61 import labour_minutes_budget, calculate_production_contractual, calculate_adhoc
 from host61 import generate_host_quote
 
-# -----------------------------------------------------------------------------
-# Page config + CSS
-# -----------------------------------------------------------------------------
 st.set_page_config(page_title="Cost and Price Calculator", page_icon="💷", layout="centered")
 inject_govuk_css()
+st.markdown("## Cost and Price Calculator")
 
-st.markdown("## Cost and Price Calculator (Instructor Costs Model)")
-
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
+# ---------- helpers ----------
 def _currency(v) -> str:
-    try:
-        return f"£{float(v):,.2f}"
-    except Exception:
-        return ""
+    try: return f"£{float(v):,.2f}"
+    except Exception: return ""
 
+def render_generic_df_to_html(df: pd.DataFrame) -> str:
+    cols = list(df.columns)
+    thead = "<tr>" + "".join([f"<th>{c}</th>" for c in cols]) + "</tr>"
+    body_rows = []
+    for _, row in df.iterrows():
+        tds = []
+        for col in cols:
+            val = row[col]
+            if isinstance(val, (int, float)) and pd.notna(val):
+                tds.append(f"<td>{_currency(val)}</td>")
+            else:
+                tds.append(f"<td>{val}</td>")
+        body_rows.append("<tr>" + "".join(tds) + "</tr>")
+    return f"<table>{thead}{''.join(body_rows)}</table>"
 
 def export_csv_bytes(df: pd.DataFrame) -> BytesIO:
-    b = BytesIO()
-    df.to_csv(b, index=False)
-    b.seek(0)
-    return b
+    b = BytesIO(); df.to_csv(b, index=False); b.seek(0); return b
 
-# -----------------------------------------------------------------------------
-# Inputs
-# -----------------------------------------------------------------------------
+# ---------- inputs ----------
 prisons_sorted = ["Select"] + sorted(PRISON_TO_REGION.keys())
 prison_choice = st.selectbox("Prison Name", prisons_sorted, index=0, key="prison_choice")
 region = PRISON_TO_REGION.get(prison_choice, "Select") if prison_choice != "Select" else "Select"
@@ -56,6 +46,10 @@ st.session_state["region"] = region
 customer_type = st.selectbox("I want to quote for", ["Select", "Commercial", "Another Government Department"], key="customer_type")
 customer_name = st.text_input("Customer Name", key="customer_name")
 workshop_mode = st.selectbox("Contract type?", ["Select", "Host", "Production"], key="workshop_mode")
+
+# Sidebar: overhead toggle
+draw_sidebar_simple()
+lock_overheads = st.session_state.get("lock_overheads", False)
 
 workshop_hours = st.number_input("How many hours per week is the workshop open?", min_value=0.0, format="%.2f", key="workshop_hours")
 num_prisoners   = st.number_input("How many prisoners employed?", min_value=0, step=1, key="num_prisoners")
@@ -81,16 +75,9 @@ recommended_pct = round((workshop_hours / 37.5) * (1 / contracts) * 100, 1) if c
 st.subheader("Instructor Time Allocation")
 st.info(f"Recommended: {recommended_pct}%")
 chosen_pct = st.slider("Adjust instructor % allocation", 0, 100, int(recommended_pct), key="chosen_pct")
+effective_pct = int(round(recommended_pct)) if chosen_pct < int(round(recommended_pct)) else int(chosen_pct)
 if chosen_pct < int(round(recommended_pct)):
     st.warning("You selected less than recommended — using the recommended % for pricing.")
-    effective_pct = int(round(recommended_pct))
-else:
-    effective_pct = int(chosen_pct)
-
-# Sidebar: lock overheads option
-with st.sidebar:
-    st.header("Options")
-    lock_overheads = st.checkbox("Lock overheads against highest instructor cost", key="lock_overheads")
 
 # Development charge (Commercial only)
 dev_rate = 0.0
@@ -100,16 +87,11 @@ if customer_type == "Commercial":
         ["None", "Employment on release/RoTL", "Post release", "Both"],
         help="Affects development charge (on overheads). 'Both' reduces dev charge to 0%."
     )
-    if support == "None":
-        dev_rate = 0.20
-    elif support in ("Employment on release/RoTL", "Post release"):
-        dev_rate = 0.10
-    else:
-        dev_rate = 0.00
+    if support == "None": dev_rate = 0.20
+    elif support in ("Employment on release/RoTL", "Post release"): dev_rate = 0.10
+    else: dev_rate = 0.00
 
-# -----------------------------------------------------------------------------
-# Validation
-# -----------------------------------------------------------------------------
+# ---------- validation ----------
 def validate_inputs():
     errors = []
     if prison_choice == "Select": errors.append("Select prison")
@@ -127,46 +109,96 @@ def validate_inputs():
         if any(s <= 0 for s in supervisor_salaries): errors.append("Instructor Avg Total must be > 0")
     return errors
 
-# -----------------------------------------------------------------------------
-# MAIN
-# -----------------------------------------------------------------------------
-if workshop_mode == "Host":
-    from host61 import run_host
-    run_host(
-        workshop_hours,
-        num_prisoners,
-        prisoner_salary,
-        num_supervisors,
-        customer_covers_supervisors,
-        supervisor_salaries,
-        effective_pct,
-        customer_type,
-        dev_rate,
-        lock_overheads,
-    )
-elif workshop_mode == "Production":
-    from production61 import run_production
-    run_production(
-        workshop_hours,
-        num_prisoners,
-        prisoner_salary,
-        supervisor_salaries,
-        effective_pct,
-        customer_covers_supervisors,
-        customer_type,
-        dev_rate,
-        lock_overheads,
-    )
+# ---------- host ----------
+def run_host():
+    errors_top = validate_inputs()
+    if st.button("Generate Costs"):
+        if errors_top:
+            st.error("Fix errors:\n- " + "\n- ".join(errors_top)); return
+        host_df, _ctx = generate_host_quote(
+            workshop_hours=float(workshop_hours),
+            num_prisoners=int(num_prisoners),
+            prisoner_salary=float(prisoner_salary),
+            num_supervisors=int(num_supervisors),
+            customer_covers_supervisors=bool(customer_covers_supervisors),
+            supervisor_salaries=supervisor_salaries,
+            effective_pct=float(effective_pct),
+            customer_type=customer_type,
+            apply_vat=True,
+            vat_rate=20.0,
+            region=region,
+            lock_overheads=bool(lock_overheads),
+            dev_rate=float(dev_rate),
+        )
+        st.markdown(render_generic_df_to_html(host_df), unsafe_allow_html=True)
+        st.download_button("Download CSV", data=export_csv_bytes(host_df), file_name="host_quote.csv", mime="text/csv")
 
-# -----------------------------------------------------------------------------
+# ---------- production ----------
+def run_production():
+    errors_top = validate_inputs()
+    if errors_top:
+        st.error("Fix errors before production:\n- " + "\n- ".join(errors_top)); return
+
+    st.markdown("---")
+    st.subheader("Production settings")
+
+    planned_output_pct = st.slider(
+        "Planned Output (%)", min_value=0, max_value=100, value=CFG.GLOBAL_OUTPUT_DEFAULT,
+        help="Scales both planned available and planned used labour minutes."
+    )
+    output_scale = float(planned_output_pct) / 100.0
+
+    prod_type = st.radio("Work type", ["Contractual work", "Ad-hoc costs (with deadlines)"], index=0, key="prod_type")
+
+    if prod_type == "Contractual work":
+        pricing_mode = st.radio("Price based on", ["Maximum units", "Target units"], index=0, key="pricing_mode")
+        pricing_mode = "as-is" if pricing_mode.startswith("Maximum") else "target"
+
+        num_items = st.number_input("Number of items produced?", min_value=1, value=1, step=1, key="num_items_prod")
+        items, targets = [], []
+        for i in range(int(num_items)):
+            with st.expander(f"Item {i+1}", expanded=(i == 0)):
+                name = st.text_input(f"Item {i+1} Name", key=f"name_{i}")
+                required = st.number_input(f"Prisoners required", min_value=1, value=1, step=1, key=f"req_{i}")
+                minutes_per = st.number_input(f"Minutes per unit", min_value=1.0, value=10.0, format="%.2f", key=f"mins_{i}")
+                assigned = st.number_input(f"Prisoners assigned", min_value=0, value=1, step=1, key=f"assigned_{i}")
+                items.append({"name": name, "required": int(required), "minutes": float(minutes_per), "assigned": int(assigned)})
+                if pricing_mode == "target":
+                    tgt = st.number_input(f"Target units per week", min_value=0, value=100, step=1, key=f"target_{i}")
+                    targets.append(int(tgt))
+
+        results = calculate_production_contractual(
+            items, planned_output_pct,
+            workshop_hours=float(workshop_hours),
+            prisoner_salary=float(prisoner_salary),
+            supervisor_salaries=supervisor_salaries,
+            effective_pct=float(effective_pct),
+            customer_covers_supervisors=bool(customer_covers_supervisors),
+            customer_type=customer_type,
+            apply_vat=True,
+            vat_rate=20.0,
+            num_prisoners=int(num_prisoners),
+            num_supervisors=int(num_supervisors),
+            lock_overheads=bool(lock_overheads),
+            region=region,
+            dev_rate=float(dev_rate),
+            pricing_mode=pricing_mode,
+            targets=targets if pricing_mode == "target" else None,
+        )
+        st.dataframe(pd.DataFrame(results))
+
+    else:  # Ad-hoc
+        st.write("Ad-hoc cost calculator coming from production61.py")
+        # You can call calculate_adhoc in the same way here
+
+# ---------- main ----------
+if workshop_mode == "Host":
+    run_host()
+elif workshop_mode == "Production":
+    run_production()
+
 # Reset
-# -----------------------------------------------------------------------------
-st.markdown('\n', unsafe_allow_html=True)
 if st.button("Reset Selections", key="reset_app_footer"):
     for k in list(st.session_state.keys()):
         del st.session_state[k]
-    try:
-        st.rerun()
-    except Exception:
-        st.experimental_rerun()
-st.markdown('\n', unsafe_allow_html=True)
+    st.experimental_rerun()
