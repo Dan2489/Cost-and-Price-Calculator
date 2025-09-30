@@ -177,4 +177,22 @@ def run_production():
     display_cols = ["Item", "Output %", "Capacity (units/week)", "Units/week",
                     "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
                     "Monthly Total (ex VAT £)", "Monthly Total (inc VAT £)"]
-    prod_df =
+    prod_df = pd.DataFrame([{
+        c: (None if (r.get(c) is None) else (round(float(r.get(c)), 2) if isinstance(r.get(c), (int, float)) else r.get(c)))
+        for c in display_cols
+    } for r in results])
+
+    st.dataframe(prod_df)
+
+    # Grand monthly total (ex VAT)
+    try:
+        grand_monthly_ex = float(prod_df["Monthly Total (ex VAT £)"].fillna(0).sum())
+    except Exception:
+        grand_monthly_ex = 0.0
+    st.markdown(f"**Grand Monthly Total (ex VAT): £{grand_monthly_ex:,.2f}**")
+
+# ---------------- MAIN ----------------
+if workshop_mode == "Host":
+    run_host()
+elif workshop_mode == "Production":
+    run_production()
