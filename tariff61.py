@@ -1,4 +1,6 @@
-# Prison -> Region mapping (no "HMP" prefixes) and Instructor pay bands
+# tariff61.py
+# Prison -> Region mapping and Instructor pay bands (per region).
+# (Exactly as your original names – no "HMP" prefixes added.)
 
 PRISON_TO_REGION = {
     "Altcourse": "National", "Ashfield": "National", "Askham Grange": "National",
@@ -45,6 +47,7 @@ PRISON_TO_REGION = {
     "Wormwood Scrubs": "Inner London", "Wymott": "National",
 }
 
+# Titles (exact wording as you used) and avg annual totals per region
 SUPERVISOR_PAY = {
     "Inner London": [
         {"title": "Production Instructor: Band 3", "avg_total": 49203},
@@ -52,10 +55,10 @@ SUPERVISOR_PAY = {
     ],
     "Outer London": [
         {"title": "Production Instructor: Band 3", "avg_total": 45856},
-        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 69584},
+        {"title": "Specialist Instructor: Band 4", "avg_total": 69584},
     ],
     "National": [
         {"title": "Production Instructor: Band 3", "avg_total": 42248},
-        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 48969},
+        {"title": "Specialist Instructor: Band 4", "avg_total": 48969},
     ],
 }
