@@ -1,10 +1,11 @@
 # config61.py
-# Central configuration for the Cost and Price Calculator
+from dataclasses import dataclass
 
-class CFG:
-    vat_rate = 20.0               # Always 20%
-    development_charge = 0.20     # Starts at 20%
-    overheads_rate = 0.61         # Overheads always 61%
-    default_hours = 37.5
-    default_prisoner_salary = 10.0
-    global_output_default = 100
+@dataclass(frozen=True)
+class AppConfig:
+    days_per_month: float = 365.0 / 12.0   # ~30.42
+    full_utilisation_week: float = 37.5    # reference week
+    default_admin_monthly: float = 150.0   # unused, kept for compatibility
+    global_output_default: int = 100       # default slider value (%)
+
+CFG = AppConfig()
