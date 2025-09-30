@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
 
 from config61 import CFG
 from host61 import generate_host_quote
@@ -9,94 +8,96 @@ from production61 import (
     calculate_production_contractual,
     calculate_adhoc,
 )
-from utils61 import (
-    inject_govuk_css,
-    PRISON_TO_REGION,
-    SUPERVISOR_PAY,
-    draw_sidebar_controls,   # ✅ fixed import
-)
+from utils61 import inject_govuk_css, PRISON_TO_REGION, SUPERVISOR_PAY, draw_sidebar
 
-# ----------------- Page setup -----------------
-st.set_page_config(page_title="Cost and Price Calculator", layout="wide")
+# ------------------------
+# App styling
+# ------------------------
 inject_govuk_css()
 
-# ----------------- Sidebar controls -----------------
-draw_sidebar_controls()   # ✅ fixed call
+st.title("Cost and Price Calculator (Instructor Cost Model)")
 
-# ----------------- Main UI -----------------
-st.markdown(
-    """
-    <div class="app-header">
-      <img class="app-logo" src="https://upload.wikimedia.org/wikipedia/commons/5/5e/UK_Government_logo.png">
-      <span class="govuk-heading-l">Cost and Price Calculator</span>
-    </div>
-    """,
-    unsafe_allow_html=True,
+# ------------------------
+# Sidebar controls
+# ------------------------
+lock_overheads, chosen_pct, prisoner_salary = draw_sidebar(
+    recommended_pct=st.session_state.get("recommended_pct", 50),
+    chosen_pct=st.session_state.get("chosen_pct", 50),
+    prisoner_salary=st.session_state.get("prisoner_salary", 0.0),
 )
 
-with st.form("main_form", clear_on_submit=False):
-    st.header("Quote Details")
+st.session_state["chosen_pct"] = chosen_pct
+st.session_state["prisoner_salary"] = prisoner_salary
 
+# ------------------------
+# Main form
+# ------------------------
+with st.form("main_form"):
+    prison = st.selectbox("Prison Name", ["Select"] + sorted(PRISON_TO_REGION.keys()))
     customer_name = st.text_input("Customer Name")
-    prison_name = st.selectbox("Prison Name", ["Select"] + list(PRISON_TO_REGION.keys()))
-    contract_type = st.selectbox("Contract type?", ["Select", "Production", "Ad-hoc", "Host"])
-
-    workshop_hours = st.number_input("How many hours per week is the workshop open?", min_value=0.0, step=0.5)
+    contract_type = st.selectbox("Contract type?", ["Select", "Commercial", "Public"])
     num_prisoners = st.number_input("How many prisoners employed?", min_value=0, step=1)
-    prisoner_salary = st.number_input("Prisoner salary per week (£)", min_value=0.0, step=1.0)
-
+    prisoner_salary_input = st.number_input("Prisoner salary per week (£)", min_value=0.0, step=0.5)
     num_supervisors = st.number_input("How many instructors?", min_value=0, step=1)
     customer_covers_supervisors = st.checkbox("Customer provides instructor(s)?")
+    workshop_hours = st.number_input("How many hours per week is the workshop open?", min_value=0.0, step=0.5)
 
-    supervisor_salaries = []
-    if num_supervisors > 0:
-        region = PRISON_TO_REGION.get(prison_name, "National")
-        options = SUPERVISOR_PAY[region]
-        for i in range(num_supervisors):
-            sup = st.selectbox(
-                f"Instructor {i+1} role",
-                [opt["title"] for opt in options],
-                key=f"sup{i}",
-            )
-            salary = next(opt["avg_total"] for opt in options if opt["title"] == sup)
-            supervisor_salaries.append(salary)
+    submitted = st.form_submit_button("Generate Costs")
 
-    effective_pct = st.slider("Adjust instructor % allocation", 0, 100, 100)
-
-    customer_type = st.radio("Customer employment support?", ["Commercial", "Public"])
-
-    dev_rate = st.slider("Development charge %", 0, 20, 10) / 100.0
-    vat_rate = 20.0
-
-    submitted = st.form_submit_button("Generate Costs", use_container_width=True)
-
-# ----------------- Run calculations -----------------
-if submitted and contract_type != "Select":
-    st.subheader("Results Summary")
-
-    if contract_type == "Host":
+# ------------------------
+# Process submission
+# ------------------------
+if submitted:
+    if prison == "Select" or contract_type == "Select":
+        st.error("Please select a prison and contract type.")
+    else:
+        # Run cost model
         host_df, ctx = generate_host_quote(
             workshop_hours=workshop_hours,
-            area_m2=100.0,  # placeholder
-            usage_key="medium",
+            area_m2=0.0,
+            usage_key="low",  # utilities removed, placeholder
             num_prisoners=num_prisoners,
-            prisoner_salary=prisoner_salary,
+            prisoner_salary=prisoner_salary_input,
             num_supervisors=num_supervisors,
             customer_covers_supervisors=customer_covers_supervisors,
-            supervisor_salaries=supervisor_salaries,
-            effective_pct=effective_pct,
-            customer_type=customer_type,
+            supervisor_salaries=[
+                SUPERVISOR_PAY[PRISON_TO_REGION[prison]][0]["avg_total"]
+                for _ in range(num_supervisors)
+            ],
+            effective_pct=chosen_pct,
+            customer_type=contract_type,
             apply_vat=True,
-            vat_rate=vat_rate,
-            dev_rate=dev_rate,
+            vat_rate=20.0,
+            dev_rate=0.1,  # development rate
         )
-        st.table(host_df)
 
-    elif contract_type == "Production":
-        st.info("Production contract calculations will go here.")
+        # ------------------------
+        # Insert Development charge breakdown
+        # ------------------------
+        if "Development charge (applied)" in host_df["Item"].values:
+            dev_row = host_df.loc[host_df["Item"] == "Development charge (applied)"].iloc[0]
+            dev_charge = dev_row["Amount (£)"]
 
-    elif contract_type == "Ad-hoc":
-        st.info("Ad-hoc contract calculations will go here.")
+            # Example rule for reductions — you can replace with your logic
+            reduction = dev_charge * 0.2 if contract_type == "Commercial" else 0.0
+            revised = dev_charge - reduction
 
-else:
-    st.caption("⬅ Fill out the form and click *Generate Costs* to calculate.")
+            # Insert rows in proper order
+            extra_rows = []
+            extra_rows.append(("Development charge (applied)", dev_charge))
+            if reduction > 0:
+                extra_rows.append(("Reductions", -reduction))
+            extra_rows.append(("Revised Development charge", revised))
+
+            # Remove old row and replace
+            host_df = host_df[host_df["Item"] != "Development charge (applied)"]
+            for row in extra_rows[::-1]:
+                host_df.loc[len(host_df)] = row
+
+        # ------------------------
+        # Show results
+        # ------------------------
+        st.subheader("Monthly Cost Breakdown")
+        def highlight_neg(val):
+            return "color: red;" if val < 0 else ""
+        st.dataframe(host_df.style.applymap(highlight_neg, subset=["Amount (£)"]))
