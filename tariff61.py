@@ -1,5 +1,4 @@
-# tariff61.py
-# Prison -> Region mapping (cleaned, no "HMP" prefixes) and Supervisor pay bands
+# Prison -> Region mapping (no "HMP" prefixes) and Instructor pay bands
 
 PRISON_TO_REGION = {
     "Altcourse": "National", "Ashfield": "National", "Askham Grange": "National",
