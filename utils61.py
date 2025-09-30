@@ -94,10 +94,15 @@ def fmt_currency(v) -> str:
 
 
 def recommended_instructor_allocation(workshop_hours: float, contracts: int) -> float:
-    """Recommended instructor % based on 37.5h baseline and contracts."""
+    """
+    Recommended instructor %:
+    (workshop_hours / 37.5) * (1/contracts) * 100
+    Capped at 100%.
+    """
     if workshop_hours <= 0 or contracts <= 0:
         return 0.0
-    return round((37.5 / workshop_hours) * (1 / contracts) * 100, 1)
+    pct = (workshop_hours / 37.5) * (1 / contracts) * 100
+    return round(min(pct, 100), 1)
 
 
 def render_summary_table(rows: list[tuple[str, float]], dev_reduction: bool = False) -> str:
@@ -116,11 +121,17 @@ def render_summary_table(rows: list[tuple[str, float]], dev_reduction: bool = Fa
 
 
 # ---------- Sidebar controls ----------
-def sidebar_controls(default_output: int):
-    """Render sidebar sliders and switches."""
+def sidebar_controls(default_output: int, workshop_hours: float, contracts: int):
+    """Render sidebar sliders and switches, including recommended instructor allocation."""
     with st.sidebar:
         st.header("Controls")
+
         lock_overheads = st.checkbox("Lock overheads to highest instructor salary", value=False)
-        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, 100)
+
+        rec = recommended_instructor_allocation(workshop_hours, contracts)
+        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, int(rec))
+        st.caption(f"Recommended allocation: **{rec}%**")
+
         prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output)
+
     return lock_overheads, instructor_pct, prisoner_output
