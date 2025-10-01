@@ -1,7 +1,6 @@
 # host61.py
 import pandas as pd
 from typing import Dict, List, Tuple
-
 from tariff61 import BAND3_COSTS
 
 def generate_host_quote(
@@ -47,22 +46,30 @@ def generate_host_quote(
     overheads_m = overhead_base_m * 0.61
     rows.append(("Overheads (61%)", overheads_m))
 
-    # Development charge (Commercial only) – show full, reductions (red), revised
-    dev_rows = []
+    # Development charge (Commercial only)
     if customer_type == "Commercial":
-        # The incoming dev_rate is already reduced (0.20 - selected reductions), we present components
-        # For display, we reconstruct "base" and "reductions"
         base_dev_rate = 0.20
         reduction_rate = base_dev_rate - float(dev_rate)
         base_dev = overheads_m * base_dev_rate
         reduction_amount = overheads_m * reduction_rate
         revised_dev = overheads_m * float(dev_rate)
 
-        dev_rows.append(("Development charge (20%)", base_dev))
+        rows.append(("Development charge (20%)", base_dev))
         if reduction_amount > 0:
-            dev_rows.append(("Development charge reductions", -reduction_amount))  # red via render_summary_table
-        dev_rows.append(("Revised development charge", revised_dev))
-        rows.extend(dev_rows)
+            rows.append(("Development charge reductions", -reduction_amount))
+        rows.append(("Revised development charge", revised_dev))
 
     # Subtotal, VAT (20%), Grand Total (monthly)
-    subtotal = sum(v for _, v in rows
+    subtotal = sum(v for _, v in rows)
+    vat = subtotal * 0.20
+    grand = subtotal + vat
+
+    rows.extend([
+        ("Subtotal", subtotal),
+        ("VAT (20%)", vat),
+        ("Grand Total (£/month)", grand),
+    ])
+
+    df = pd.DataFrame(rows, columns=["Item", "Amount (£)"])
+    ctx = {"rows": rows}
+    return df, ctx
