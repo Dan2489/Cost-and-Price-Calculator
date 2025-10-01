@@ -42,14 +42,9 @@ workshop_hours = st.number_input("How many hours is the workshop open per week?"
 num_prisoners = st.number_input("How many prisoners employed per week?", min_value=0, step=1)
 prisoner_salary = st.number_input("Average prisoner salary per week (£)", min_value=0.0, format="%.2f")
 
-num_supervisors = st.number_input("How many instructors?", min_value=0, step=1)
-
-# ✅ Customer provides instructor(s)?
-customer_covers_supervisors = st.checkbox(
-    "Customer provides instructor(s)?",
-    value=False,
-    key="customer_covers_supervisors"
-)
+# Instructor inputs
+num_supervisors = st.number_input("How many Instructors?", min_value=1, step=1)
+customer_covers_supervisors = st.checkbox("Customer provides Instructor(s)?", value=False)
 
 supervisor_salaries = []
 if num_supervisors > 0 and region != "Select" and not customer_covers_supervisors:
@@ -115,7 +110,7 @@ if contract_type == "Host":
                 num_prisoners=num_prisoners,
                 prisoner_salary=prisoner_salary,
                 num_supervisors=num_supervisors,
-                customer_covers_supervisors=customer_covers_supervisors,  # ✅ passed
+                customer_covers_supervisors=customer_covers_supervisors,
                 supervisor_salaries=supervisor_salaries,
                 region=region,
                 contracts=contracts,
@@ -127,6 +122,9 @@ if contract_type == "Host":
 
     if "host_df" in st.session_state:
         df = st.session_state["host_df"]
+        # If customer provides instructors, hide Instructor Salary row
+        if customer_covers_supervisors:
+            df = df[~df["Item"].str.contains("Instructor Salary", na=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
         # Productivity slider
@@ -229,7 +227,7 @@ if contract_type == "Production":
                         prisoner_salary=float(prisoner_salary),
                         supervisor_salaries=supervisor_salaries,
                         effective_pct=float(instructor_pct),
-                        customer_covers_supervisors=customer_covers_supervisors,  # ✅ passed
+                        customer_covers_supervisors=customer_covers_supervisors,
                         region=region,
                         customer_type="Commercial",
                         apply_vat=True, vat_rate=20.0,
@@ -239,6 +237,7 @@ if contract_type == "Production":
                         pricing_mode=pricing_mode_key,
                         targets=targets if pricing_mode_key == "target" else None,
                         lock_overheads=lock_overheads,
+                        employment_support=employment_support,
                     )
                     display_cols = ["Item", "Output %", "Capacity (units/week)", "Units/week",
                                     "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
@@ -290,13 +289,14 @@ if contract_type == "Production":
                     prisoner_salary=float(prisoner_salary),
                     supervisor_salaries=supervisor_salaries,
                     effective_pct=float(instructor_pct),
-                    customer_covers_supervisors=customer_covers_supervisors,  # ✅ passed
+                    customer_covers_supervisors=customer_covers_supervisors,
                     region=region,
                     customer_type="Commercial",
                     apply_vat=True, vat_rate=20.0,
                     dev_rate=0.0,
                     today=date.today(),
                     lock_overheads=lock_overheads,
+                    employment_support=employment_support,
                 )
                 if result["feasibility"]["hard_block"]:
                     st.error(result["feasibility"]["reason"])
@@ -316,6 +316,10 @@ if contract_type == "Production":
 
     if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
         df = st.session_state["prod_df"]
+        # Hide Instructor Salary row if customer provides
+        if customer_covers_supervisors:
+            if "Item" in df.columns:
+                df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
         # Productivity slider
@@ -340,11 +344,3 @@ if contract_type == "Production":
             df_adj, extra_note = None, None
 
         c1, c2 = st.columns(2)
-        with c1: 
-            st.download_button("Download CSV (Production)", data=export_csv_bytes(df), file_name="production_quote.csv", mime="text/csv")
-        with c2: 
-            st.download_button(
-                "Download PDF-ready HTML (Production)",
-                data=export_html(None, df, title="Production Quote", extra_note=extra_note, adjusted_df=df_adj),
-                file_name="production_quote.html", mime="text/html"
-            )
