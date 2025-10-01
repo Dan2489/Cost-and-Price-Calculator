@@ -1,37 +1,35 @@
 # utils61.py
 import streamlit as st
 
-# ---------- Styling ----------
-def inject_govuk_css():
-    """Inject GOV.UK-style CSS overrides with responsive sidebar."""
+def inject_govuk_css() -> None:
     st.markdown(
         """
         <style>
-          /* Sidebar width: only constrain on desktop */
+          /* Responsive Sidebar */
           @media (min-width: 1200px) {
             [data-testid="stSidebar"] {
-              width: 380px !important;
+              width: 350px !important;
             }
           }
-          @media (min-width: 768px) and (max-width: 1199px) {
+          @media (max-width: 768px) {
             [data-testid="stSidebar"] {
-              width: 300px !important;
+              width: auto !important;
+              min-width: unset !important;
+              max-width: unset !important;
             }
           }
-          /* On mobile, let Streamlit handle collapse — no forced widths */
 
           /* GOV.UK colours */
           :root {
             --govuk-green: #00703c;
             --govuk-yellow: #ffdd00;
-            --govuk-red: #d4351c;
           }
 
           /* Buttons */
           .stButton > button {
             background: var(--govuk-green) !important;
             color: #fff !important;
-            border: none !important;
+            border: 2px solid transparent !important;
             border-radius: 0 !important;
             font-weight: 600;
           }
@@ -58,80 +56,67 @@ def inject_govuk_css():
             background-color: var(--govuk-green) !important;
           }
 
-          /* Tables */
-          table.govuk-table {
+          /* Centered results tables */
+          .results-table {
+            max-width: 900px;
+            margin: 1rem auto;
+          }
+          .results-table table {
             width: 100%;
             border-collapse: collapse;
-            margin: 1rem 0;
+            margin: 12px 0;
           }
-          table.govuk-table th, table.govuk-table td {
+          .results-table th, .results-table td {
             border-bottom: 1px solid #b1b4b6;
-            padding: 6px 8px;
+            padding: 8px;
             text-align: left;
           }
-          table.govuk-table th {
-            background: #f3f2f1;
-          }
-          table.govuk-table td.neg {
-            color: var(--govuk-red);
-          }
-          table.govuk-table tr.total td {
-            font-weight: bold;
-          }
+          .results-table th { background: #f3f2f1; }
+          .results-table td.neg { color: #d4351c; }
+          .results-table tr.total td { font-weight: 700; }
         </style>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
 
 
-# ---------- Helpers ----------
 def fmt_currency(v) -> str:
-    """Format a number as £ with commas and 2dp."""
     try:
         return f"£{float(v):,.2f}"
     except Exception:
         return ""
 
 
-def recommended_instructor_allocation(workshop_hours: float, contracts: int) -> float:
-    """
-    Recommended instructor %:
-    (workshop_hours / 37.5) * (1/contracts) * 100
-    Capped at 100%.
-    """
-    if workshop_hours <= 0 or contracts <= 0:
-        return 0.0
-    pct = (workshop_hours / 37.5) * (1 / contracts) * 100
-    return round(min(pct, 100), 1)
-
-
-def render_summary_table(rows: list[tuple[str, float]], dev_reduction: bool = False) -> str:
-    """Render a GOV.UK-style summary table with optional dev charge reduction in red."""
-    html = ["<table class='govuk-table'>"]
-    html.append("<tr><th>Item</th><th>Amount (£)</th></tr>")
-    for label, val in rows:
-        css = ""
-        if dev_reduction and "reduction" in label.lower():
-            css = " class='neg'"
-        elif any(word in label.lower() for word in ["total", "subtotal", "grand"]):
-            css = " class='total'"
-        html.append(f"<tr><td>{label}</td><td{css}>{fmt_currency(val)}</td></tr>")
-    html.append("</table>")
-    return "".join(html)
-
-
-# ---------- Sidebar controls ----------
-def sidebar_controls(default_output: int, workshop_hours: float, contracts: int):
-    """Render sidebar sliders and switches, including recommended instructor allocation."""
+def sidebar_controls(global_output_default: int, workshop_hours: float, contracts: int):
+    """Sidebar with instructor allocation + prisoner output + lock overheads"""
     with st.sidebar:
         st.header("Controls")
-
         lock_overheads = st.checkbox("Lock overheads to highest instructor salary", value=False)
 
-        rec = recommended_instructor_allocation(workshop_hours, contracts)
-        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, int(rec))
-        st.caption(f"Recommended allocation: **{rec}%**")
+        # Instructor allocation slider
+        rec = 0.0
+        if workshop_hours > 0 and contracts > 0:
+            rec = min(100.0, (workshop_hours / 37.5) * (1 / contracts) * 100.0)
+        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, int(round(rec)) if rec > 0 else 100)
+        if rec > 0:
+            st.caption(f"Recommended: {rec:.0f}%")
 
-        prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output)
+        # Prisoner output slider
+        prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, global_output_default)
 
-    return lock_overheads, instructor_pct, prisoner_output
+        return lock_overheads, instructor_pct, prisoner_output
+
+
+def render_summary_table(rows, dev_reduction: bool = False) -> str:
+    """Render a breakdown table as HTML (wrapped in results-table container)."""
+    body = []
+    for item, val in rows:
+        val_str = fmt_currency(val) if val is not None else ""
+        cls = ""
+        if dev_reduction and "reduction" in str(item).lower():
+            cls = " class='neg'"
+        if "Total" in str(item):
+            body.append(f"<tr class='total'><td>{item}</td><td>{val_str}</td></tr>")
+        else:
+            body.append(f"<tr><td>{item}</td><td{cls}>{val_str}</td></tr>")
+    return f"<div class='results-table'><table><tr><th>Item</th><th>Amount (£)</th></tr>{''.join(body)}</table></div>"
