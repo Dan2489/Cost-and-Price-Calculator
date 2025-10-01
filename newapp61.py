@@ -344,15 +344,14 @@ if contract_type == "Production":
             df_adj, extra_note = None, None
 
         c1, c2 = st.columns(2)
-        with c1: 
+        with c1:
             st.download_button(
                 "Download CSV (Production)",
                 data=export_csv_bytes(df),
                 file_name="production_quote.csv",
                 mime="text/csv"
             )
-        
-           with c2: 
+        with c2:
             st.download_button(
                 "Download PDF-ready HTML (Production)",
                 data=export_html(None, df, title="Production Quote", extra_note=extra_note, adjusted_df=df_adj),
