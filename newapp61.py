@@ -12,6 +12,7 @@ from production61 import (
     labour_minutes_budget,
     calculate_production_contractual,
     calculate_adhoc,
+    build_adhoc_table,   # ⬅️ new import
 )
 import host61
 
@@ -259,10 +260,10 @@ if contract_type == "Production":
                 c1, c2, c3 = st.columns([2, 1, 1])
                 with c1: item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
                 with c2: units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key=f"adhoc_units_{i}")
-                with c3: deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")  # fixed f-string
+                with c3: deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
                 c4, c5 = st.columns([1, 1])
-                with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")  # fixed f-string
-                with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=1.0, value=10.0, format="%.2f", key=f"adhoc_mins_{i}")  # fixed f-string
+                with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
+                with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=1.0, value=10.0, format="%.2f", key=f"adhoc_mins_{i}")
                 lines.append({
                     "name": (item_name.strip() or f"Item {i+1}") if isinstance(item_name, str) else f"Item {i+1}",
                     "units": int(units_requested),
@@ -300,28 +301,11 @@ if contract_type == "Production":
                 if result["feasibility"]["hard_block"]:
                     st.error(result["feasibility"]["reason"])
                 else:
-                    col_headers = ["Item", "Units",
-                                   "Unit Cost (ex VAT £)", "Unit Cost (inc VAT £)",
-                                   "Line Total (ex VAT £)", "Line Total (inc VAT £)"]
-                    data_rows = []
-                    for p in result.get("per_line", []):
-                        # robust float casting so rows never blank
-                        def _f(x):
-                            try: return float(x)
-                            except Exception: return 0.0
-                        data_rows.append([
-                            p.get("name", "—"),
-                            f"{int(p.get('units', 0)):,}",
-                            f"{_f(p.get('unit_cost_ex_vat', 0)):.2f}",
-                            f"{_f(p.get('unit_cost_inc_vat', 0)):.2f}",
-                            f"{_f(p.get('line_total_ex_vat', 0)):.2f}",
-                            f"{_f(p.get('line_total_inc_vat', 0)):.2f}",
-                        ])
-                    # if still empty, show a single blank row (prevents empty table render)
-                    if not data_rows:
-                        data_rows = [["—", "0", "0.00", "0.00", "0.00", "0.00"]]
-                    df = pd.DataFrame(data_rows, columns=col_headers)
+                    df, totals = build_adhoc_table(result)
                     st.session_state["prod_df"] = df
+                    st.markdown(render_table_html(df), unsafe_allow_html=True)
+                    st.markdown(f"**Total ex VAT:** {fmt_currency(totals['ex_vat'])}")
+                    st.markdown(f"**Total inc VAT:** {fmt_currency(totals['inc_vat'])}")
 
     if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
         df = st.session_state["prod_df"]
