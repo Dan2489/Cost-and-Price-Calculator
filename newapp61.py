@@ -215,7 +215,7 @@ if contract_type == "Production":
         if pricing_mode_key == "as-is" and used_minutes_planned > budget_minutes_planned:
             st.error("Planned used minutes exceed planned available minutes.")
         else:
-            if st.button("Generate Production Costs"):
+            if st.button("Generate Production Costs", key="generate_contractual"):
                 errs = validate_inputs()
                 if errs:
                     st.error("Fix errors:\n- " + "\n- ".join(errs))
@@ -271,7 +271,7 @@ if contract_type == "Production":
                     "mins_per_item": float(minutes_per_item),
                 })
 
-        if st.button("Generate Production Costs"):
+        if st.button("Generate Ad-hoc Costs", key="generate_adhoc"):
             errs = validate_inputs()
             if workshop_hours <= 0: errs.append("Hours per week must be > 0 for Ad-hoc")
             for i, ln in enumerate(lines):
