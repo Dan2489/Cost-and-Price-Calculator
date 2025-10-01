@@ -93,9 +93,12 @@ def sidebar_controls(default_output: int = 100):
                                     help="Effective productivity of prisoner labour")
     return lock_overheads, instructor_pct, prisoner_output
 
-def render_table_html(df: pd.DataFrame) -> str:
-    if df is None or not isinstance(df, pd.DataFrame): return ""
+def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
+    """Render DataFrame as HTML table with optional highlight background."""
+    if df is None or not isinstance(df, pd.DataFrame): 
+        return ""
     df2 = df.copy()
+
     currency_cols = {
         "Amount (£)", "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
         "Monthly Total ex VAT (£)", "Monthly Total inc VAT (£)", "Monthly Total (£)",
@@ -104,10 +107,26 @@ def render_table_html(df: pd.DataFrame) -> str:
     for col in df2.columns:
         if col in currency_cols or "£" in str(col):
             try:
-                df2[col] = pd.to_numeric(df2[col], errors="coerce").map(lambda x: fmt_currency(x) if pd.notna(x) else "")
+                df2[col] = pd.to_numeric(
+                    df2[col].astype(str).str.replace("£", "").str.replace(",", ""), 
+                    errors="coerce"
+                ).map(lambda x: fmt_currency(x) if pd.notna(x) else "")
             except Exception:
                 pass
-    return df2.to_html(index=False, border=1)
+
+    style = """
+      <style>
+        table.custom {width:100%;border-collapse:collapse;margin:12px 0;}
+        table.custom th, table.custom td {border:1px solid #b1b4b6;padding:8px;text-align:left;}
+        table.custom th {background:#f3f2f1;}
+        table.custom td.neg {color:#d4351c;}
+        table.custom tr.grand td {font-weight:700;}
+      </style>
+    """
+    table_html = df2.to_html(index=False, classes="custom", border=0, escape=False)
+    if highlight:
+        table_html = table_html.replace('<table class="custom">', '<table class="custom" style="background:#fff9db;">')
+    return style + table_html
 
 def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
     """Return a new DataFrame with all £ columns scaled by factor (0–1)."""
@@ -115,7 +134,11 @@ def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
     for col in df_adj.columns:
         if "£" in str(col) or col in ["Amount (£)", "Subtotal", "VAT (20%)", "Grand Total (£/month)"]:
             try:
-                df_adj[col] = pd.to_numeric(df_adj[col].astype(str).str.replace("£","").str.replace(",",""), errors="coerce") * factor
+                raw = pd.to_numeric(
+                    df_adj[col].astype(str).str.replace("£", "").str.replace(",", ""), 
+                    errors="coerce"
+                )
+                df_adj[col] = raw * factor
                 df_adj[col] = df_adj[col].map(lambda x: fmt_currency(x) if pd.notna(x) else "")
             except Exception:
                 pass
