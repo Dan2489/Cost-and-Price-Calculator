@@ -13,6 +13,11 @@ def inject_govuk_css() -> None:
           th { background: #f3f2f1; }
           td.neg { color: #d4351c; }
           tr.grand td { font-weight: 700; }
+          /* Sidebar controls */
+          [data-testid="stSidebar"] {
+            min-width: 320px !important;
+            max-width: 320px !important;
+          }
         </style>
         """,
         unsafe_allow_html=True
@@ -70,3 +75,27 @@ def export_html(host_df=None, prod_df=None, title="Quote", extra_note=None) -> B
     b = BytesIO(html_doc.encode("utf-8"))
     b.seek(0)
     return b
+
+
+# -------------------------------------------------------------------
+# Sidebar controls
+# -------------------------------------------------------------------
+def sidebar_controls(default_output: int = 100):
+    with st.sidebar:
+        st.header("Controls")
+
+        lock_overheads = st.checkbox("Lock overheads to highest instructor salary?", value=False)
+
+        instructor_pct = st.slider(
+            "Instructor allocation (%)",
+            min_value=0, max_value=100, value=100, step=5,
+            help="Adjust how much of the instructor salary is applied"
+        )
+
+        prisoner_output = st.slider(
+            "Prisoner labour output (%)",
+            min_value=0, max_value=100, value=default_output, step=5,
+            help="Adjust effective productivity of prisoner labour"
+        )
+
+    return lock_overheads, instructor_pct, prisoner_output
