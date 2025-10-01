@@ -14,24 +14,36 @@ def generate_host_quote(
     instructor_allocation: float = 100.0,
     lock_overheads: bool = False,
 ) -> Tuple[pd.DataFrame, Dict]:
+    """
+    Host monthly quote:
+    - Prisoner wages
+    - Instructor costs apportioned by contracts and allocation%
+    - Overheads at 61% of instructor cost (or locked to the highest instructor salary)
+    - Development charge: 20%, less 10% per support (RoTL/Post) or 20% if both.
+    - VAT 20%
+    """
     breakdown: Dict[str, float] = {}
 
+    # Prisoner wages per month
     breakdown["Prisoner wages"] = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
 
+    # Instructors per month (apportioned by contracts and allocation%)
     instructor_cost = 0.0
-    if num_supervisors > 0:
+    if num_supervisors > 0 and supervisor_salaries:
         instructor_cost = sum(
-            (s / 12.0) * (instructor_allocation / 100.0) * (1.0 / contracts)
+            (s / 12.0) * (float(instructor_allocation) / 100.0) * (1.0 / float(contracts))
             for s in supervisor_salaries
         )
     breakdown["Instructors"] = instructor_cost
 
+    # Overheads 61%
     if lock_overheads and supervisor_salaries:
-        overhead_base = (max(supervisor_salaries) / 12.0) * (instructor_allocation / 100.0) * (1.0 / contracts)
+        overhead_base = (max(supervisor_salaries) / 12.0) * (float(instructor_allocation) / 100.0) * (1.0 / float(contracts))
     else:
         overhead_base = instructor_cost
     breakdown["Overheads (61%)"] = overhead_base * 0.61
 
+    # Development charge (Commercial-type logic simplified to employment_support flag)
     dev_rate = 0.20
     if employment_support in ("Employment on release/RoTL", "Post release"):
         dev_rate = 0.10
@@ -44,6 +56,7 @@ def generate_host_quote(
         breakdown["Development charge reductions"] = -reduction
     breakdown["Revised development charge"] = overhead_base * dev_rate
 
+    # Totals + VAT
     subtotal = sum(breakdown.values())
     breakdown["Subtotal"] = subtotal
     vat_amount = subtotal * 0.20
@@ -51,7 +64,6 @@ def generate_host_quote(
     grand_total = subtotal + vat_amount
     breakdown["Grand Total (£/month)"] = grand_total
 
-    rows = [(k, v) for k, v in breakdown.items()]
-    host_df = pd.DataFrame(rows, columns=["Item", "Amount (£)"])
+    host_df = pd.DataFrame([(k, v) for k, v in breakdown.items()], columns=["Item", "Amount (£)"])
     ctx = {"subtotal": subtotal, "vat_amount": vat_amount, "grand_total": grand_total}
     return host_df, ctx
