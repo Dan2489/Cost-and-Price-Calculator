@@ -81,9 +81,14 @@ def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
         table.custom.highlight { background-color: #fff8dc; }
     </style>
     """
-    html = f"<html><head>{styles}</head><body>"
-    html += f"<h1>{title}</h1>"
-
+    html = f"""<html>
+<head>
+<meta charset="utf-8">
+{styles}
+</head>
+<body>
+<h1>{title}</h1>
+"""
     if df_host is not None:
         html += render_table_html(df_host)
     if df_prod is not None:
