@@ -14,7 +14,9 @@ def main():
     inject_govuk_css()
     st.markdown("## Cost and Price Calculator")
 
+    # -----------------------
     # Base inputs
+    # -----------------------
     prison_choice = st.selectbox("Prison Name", [""] + sorted(PRISON_TO_REGION.keys()), index=0)
     region = PRISON_TO_REGION.get(prison_choice) if prison_choice else None
 
@@ -47,7 +49,9 @@ def main():
         index=0
     )
 
-    # Sidebar
+    # -----------------------
+    # Sidebar controls
+    # -----------------------
     recomm_pct = min(100, int(round((workshop_hours / 37.5) * (1 / max(1, int(contracts))) * 100))) if workshop_hours and contracts else None
     show_output = (contract_type == "Production")
     lock_overheads, instructor_pct, prisoner_output = sidebar_controls(
@@ -71,7 +75,9 @@ def main():
 
     meta = {"customer": customer_name, "prison": prison_choice, "region": region or ""}
 
-    # Host Mode
+    # -----------------------
+    # HOST
+    # -----------------------
     if contract_type == "Host":
         if st.button("Generate Costs"):
             host_df, ctx = generate_host_quote(
@@ -93,10 +99,13 @@ def main():
             st.download_button("Download PDF-ready HTML (Host)", data=export_doc("Host Quote", meta, host_html),
                                file_name="host_quote.html", mime="text/html")
 
-    # Production Mode
+    # -----------------------
+    # PRODUCTION
+    # -----------------------
     elif contract_type == "Production":
         prod_mode = st.radio("Contractual or Ad-hoc?", ["Contractual", "Ad-hoc"], index=0)
 
+        # -------- Contractual --------
         if prod_mode == "Contractual":
             pricing_mode = st.radio("Would you like a price for:", ["Maximum output", "Targeted output"], index=0)
             num_items = st.number_input("Number of items produced?", min_value=1, value=1, step=1)
@@ -148,8 +157,6 @@ def main():
 
                 st.subheader("Production (Contractual)")
                 df = pd.DataFrame(out["per_item"])
-
-                # Drop Feasible/Note if pricing mode is "as-is"
                 if pricing_mode == "Maximum output":
                     df = df.drop(columns=["Feasible", "Note"], errors="ignore")
 
@@ -158,24 +165,19 @@ def main():
                                    data=export_doc("Production – Contractual Quote", meta, _df_to_html_table(df)),
                                    file_name="production_contractual.html", mime="text/html")
 
+        # -------- Ad-hoc --------
         else:
-            # Ad-hoc production
             num_lines = st.number_input("How many product lines are needed?", min_value=1, value=1, step=1)
             adhoc_lines = []
             for i in range(int(num_lines)):
                 with st.expander(f"Product line {i+1}", expanded=(i == 0)):
                     c1, c2, c3 = st.columns([2, 1, 1])
-                    with c1:
-                        item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
-                    with c2:
-                        units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key=f"adhoc_units_{i}")
-                    with c3:
-                        deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
+                    with c1: item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
+                    with c2: units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key=f"adhoc_units_{i}")
+                    with c3: deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
                     c4, c5 = st.columns([1, 1])
-                    with c4:
-                        pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
-                    with c5:
-                        minutes_per_item = st.number_input("Minutes to make one", min_value=1.0, value=10.0, format="%.2f", key=f"adhoc_mins_{i}")
+                    with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
+                    with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=1.0, value=10.0, format="%.2f", key=f"adhoc_mins_{i}")
                     adhoc_lines.append({
                         "name": (item_name.strip() or f"Item {i+1}") if isinstance(item_name, str) else f"Item {i+1}",
                         "units": int(units_requested),
@@ -205,7 +207,6 @@ def main():
                 df = pd.DataFrame(result["per_line"])
                 st.markdown(_df_to_html_table(df), unsafe_allow_html=True)
 
-                # Feasibility advice
                 if result["feasibility"]["advice"]:
                     if result["feasibility"]["hard_block"]:
                         st.error(result["feasibility"]["advice"])
@@ -216,6 +217,9 @@ def main():
                                    data=export_doc("Production – Ad-hoc Quote", meta, _df_to_html_table(df)),
                                    file_name="production_adhoc.html", mime="text/html")
 
+    # -----------------------
+    # Reset
+    # -----------------------
     if st.button("Reset Selections"):
         for k in list(st.session_state.keys()):
             del st.session_state[k]
