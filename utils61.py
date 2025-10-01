@@ -80,7 +80,7 @@ def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
         table.custom.highlight { background-color: #fff8dc; }
     </style>
     """
-    html = f"<html><head>{styles}</head><body>"
+    html = f"<html><head><meta charset='utf-8' />{styles}</head><body>"  # ensure £ renders correctly
     html += f"<h1>{title}</h1>"
 
     if df_host is not None:
@@ -101,22 +101,31 @@ def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
 # Table rendering
 # -------------------------------
 def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
-    """Render any table into GOV.UK-styled HTML, formatting £/Cost/Total/Price/Grand columns."""
     if df is None or df.empty:
         return "<p><em>No data</em></p>"
 
     df_fmt = df.copy()
     for col in df_fmt.columns:
         if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand"]):
-            def try_fmt(x):
-                try:
-                    return fmt_currency(str(x).replace("£", "").replace(",", ""))
-                except Exception:
-                    return x
-            df_fmt[col] = df_fmt[col].map(try_fmt)
-
+            df_fmt[col] = df_fmt[col].apply(lambda x: _fmt_cell(x))
     cls = "custom highlight" if highlight else "custom"
     return df_fmt.to_html(index=False, classes=cls, border=0, justify="left", escape=False)
+
+def _fmt_cell(x):
+    import pandas as pd
+    if pd.isna(x):
+        return ""
+    s = str(x)
+    if s.strip() == "":
+        return ""
+    try:
+        # handle already-currency strings
+        if "£" in s:
+            s_num = s.replace("£", "").replace(",", "").strip()
+            return fmt_currency(float(s_num))
+        return fmt_currency(float(s))
+    except Exception:
+        return s
 
 # -------------------------------
 # Adjust table for productivity
@@ -136,5 +145,4 @@ def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
                 except Exception:
                     return val
             df_adj[col] = df_adj[col].map(try_scale)
-
     return df_adj
