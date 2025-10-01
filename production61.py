@@ -6,13 +6,16 @@ from tariff61 import BAND3_COSTS
 
 # ---------- Helpers ----------
 def labour_minutes_budget(num_pris: int, hours: float) -> float:
+    """Available labour minutes per week at 100% output."""
     return max(0.0, float(num_pris) * float(hours) * 60.0)
 
 def _working_days_between(start: date, end: date) -> int:
-    if end < start: return 0
+    if end < start: 
+        return 0
     days, d = 0, start
     while d <= end:
-        if d.weekday() < 5: days += 1
+        if d.weekday() < 5:
+            days += 1
         d += timedelta(days=1)
     return days
 
@@ -29,21 +32,21 @@ def calculate_production_contractual(
     region: str,
     customer_type: str,
     dev_rate: float,
-    pricing_mode: str,
+    pricing_mode: str,                 # "as-is" or "target"
     targets: Optional[List[int]],
     lock_overheads: bool,
     num_prisoners: int,
     contracts_overseen: int,
 ) -> Dict:
 
-    # Instructor cost
+    # Instructor weekly cost (apportioned by allocation% and contracts)
     if customer_covers_supervisors or len(supervisor_salaries) == 0:
         inst_weekly_total = 0.0
     else:
         share = (float(effective_pct) / 100.0) / max(1, int(contracts_overseen))
         inst_weekly_total = sum((s / 52.0) * share for s in supervisor_salaries)
 
-    # Overheads (61%)
+    # Overheads base (61% rule)
     if customer_covers_supervisors:
         shadow = BAND3_COSTS.get(region, BAND3_COSTS["National"])
         overhead_base = (shadow / 52.0) * (float(effective_pct) / 100.0)
@@ -85,8 +88,10 @@ def calculate_production_contractual(
         if pricing_mode == "target":
             tgt = 0
             if targets and idx < len(targets):
-                try: tgt = int(targets[idx])
-                except Exception: tgt = 0
+                try:
+                    tgt = int(targets[idx])
+                except Exception:
+                    tgt = 0
             units_for_pricing = float(tgt)
         else:
             units_for_pricing = capacity_units
@@ -196,35 +201,13 @@ def calculate_adhoc(
             "Total inc VAT (£)": unit_cost_inc_vat * int(ln["units"]),
         })
 
-    wd_needed_all = math.ceil(total_job_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
     earliest_wd_available = earliest_wd_available or 0
     available_total_minutes_by_deadline = current_daily_capacity * earliest_wd_available
     hard_block = total_job_minutes > available_total_minutes_by_deadline
 
-    advice = None
+    # Feasibility advice (UK date)
     if hard_block:
         deficit = total_job_minutes - available_total_minutes_by_deadline
-        extra_pris = math.ceil(deficit / (hours_per_day * 60.0 * earliest_wd_available)) if earliest_wd_available > 0 else None
-        extra_days = math.ceil(deficit / current_daily_capacity) if current_daily_capacity > 0 else None
-        advice = (
-            f"Requested {total_job_minutes:,.0f} mins > available {available_total_minutes_by_deadline:,.0f} mins by deadline. "
-            f"To meet demand, add {extra_pris or '?'} prisoner(s) or extend deadline by {extra_days or '?'} working day(s)."
-        )
-    else:
-        finish_days = math.ceil(total_job_minutes / current_daily_capacity) if current_daily_capacity > 0 else 0
-        finish_date = today
-        days_added = 0
-        while days_added < finish_days:
-            finish_date += timedelta(days=1)
-            if finish_date.weekday() < 5: days_added += 1
-        advice = f"Earliest ready date: {finish_date.strftime('%d/%m/%Y')}"
-
-    totals_ex = sum(p["Total ex VAT (£)"] for p in per_line)
-    totals_inc = sum(p["Total inc VAT (£)"] for p in per_line)
-
-    return {
-        "per_line": per_line,
-        "totals": {"ex_vat": totals_ex, "inc_vat": totals_inc},
-        "capacity": {"current_daily_capacity": current_daily_capacity, "minutes_per_week_capacity": minutes_per_week_capacity},
-        "feasibility": {"hard_block": hard_block, "advice": advice},
-    }
+        extra_pris = None
+        if earliest_wd_available > 0:
+            extra_pris = math.ceil(def
