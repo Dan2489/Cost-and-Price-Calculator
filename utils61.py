@@ -64,7 +64,11 @@ def export_doc(title: str, meta: dict, body_html: str, drop_cols: list[str] = No
         f"Region: {meta.get('region','')}</p>"
     )
     closing_note = """
-    <p>We are pleased to provide this quotation for the requested services. 
+    <p>We are pleased to set out below the terms of our Quotation for the Goods and/or Services you are 
+    currently seeking. We confirm that this Quotation and any subsequent contract entered into as a result 
+    is, and will be, subject exclusively to our Standard Conditions of Sale of Goods and/or Services a copy 
+    of which is available on request. Please note that all prices are exclusive of VAT and carriage costs at 
+    time of order of which the customer shall be additionally liable to pay. 
     Prices are indicative and may change based on the final scope and site conditions. 
     Please treat this document as confidential and for the intended recipient only.</p>
     """
