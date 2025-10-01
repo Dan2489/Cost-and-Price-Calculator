@@ -60,7 +60,7 @@ def validate_inputs():
         errors.append("Select prison")
     if region == "Select":
         errors.append("Region could not be derived from prison selection")
-    if not customer_name.strip():
+    if not str(customer_name).strip():
         errors.append("Enter customer name")
     if contract_type == "Select":
         errors.append("Select contract type")
@@ -71,6 +71,33 @@ def validate_inputs():
     if num_supervisors > 0 and len(supervisor_salaries) != num_supervisors:
         errors.append("Choose a title for each instructor")
     return errors
+
+
+# -------------------------------------------------------------------
+# Helpers: extract a safe total from DF (fallback to ctx)
+# -------------------------------------------------------------------
+def _safe_total_from_df(df: pd.DataFrame, ctx: dict | None = None) -> float:
+    try:
+        # Host-style table: look for a "Grand Total" row
+        if {"Item", "Amount (£)"}.issubset(df.columns):
+            mask = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False)
+            if mask.any():
+                return float(pd.to_numeric(df.loc[mask, "Amount (£)"], errors="coerce").dropna().iloc[-1])
+            # else sum the Amount column (last resort)
+            return float(pd.to_numeric(df["Amount (£)"], errors="coerce").fillna(0).sum())
+
+        # Production-style table: sum monthly inc VAT column if present
+        prod_cols = ["Monthly Total inc VAT (£)", "Monthly Total (inc VAT £)"]
+        for c in prod_cols:
+            if c in df.columns:
+                return float(pd.to_numeric(df[c], errors="coerce").fillna(0).sum())
+
+        # Fallback to ctx if provided
+        if ctx and "grand_total" in ctx:
+            return float(ctx["grand_total"])
+    except Exception:
+        pass
+    return 0.0
 
 
 # -------------------------------------------------------------------
@@ -102,7 +129,9 @@ if contract_type == "Host":
                 min_value=50, max_value=100, value=100, step=5,
                 help="Scale final totals by expected productivity (e.g. 90% = reduce costs by 10%)"
             )
-            adjusted_total = ctx["grand_total"] * (productivity_adj / 100)
+
+            base_total = _safe_total_from_df(df, ctx)
+            adjusted_total = base_total * (productivity_adj / 100.0)
             st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
 
             # Export
@@ -153,7 +182,9 @@ if contract_type == "Production":
                 min_value=50, max_value=100, value=100, step=5,
                 help="Scale final totals by expected productivity (e.g. 90% = reduce costs by 10%)"
             )
-            adjusted_total = ctx["grand_total"] * (productivity_adj / 100)
+
+            base_total = _safe_total_from_df(df, ctx)
+            adjusted_total = base_total * (productivity_adj / 100.0)
             st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
 
             # Export
