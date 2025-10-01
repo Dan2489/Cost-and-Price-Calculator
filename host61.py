@@ -1,6 +1,6 @@
 # host61.py
+from typing import List, Dict, Tuple
 import pandas as pd
-from typing import List, Tuple, Dict
 from tariff61 import BAND3_COSTS
 
 def generate_host_quote(
@@ -10,66 +10,62 @@ def generate_host_quote(
     num_supervisors: int,
     customer_covers_supervisors: bool,
     supervisor_salaries: List[float],
-    effective_pct: float,         # instructor allocation %
+    effective_pct: float,
     region: str,
     customer_type: str,
-    dev_rate: float,              # 0..0.2 after reductions; 0 if Another Government Department
+    dev_rate: float,
     contracts_overseen: int,
     lock_overheads: bool,
 ) -> Tuple[pd.DataFrame, Dict]:
-
-    rows = []
+    breakdown: Dict[str, float] = {}
 
     # Prisoner wages (monthly)
-    prisoner_wages_m = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
-    rows.append(("Prisoner wages", prisoner_wages_m))
+    breakdown["Prisoner wages"] = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
 
-    # Instructor cost (monthly) – excluded if customer provides instructor(s)
-    if customer_covers_supervisors:
-        instructor_m_total = 0.0
-    else:
+    # Instructor cost (monthly)
+    instructor_cost = 0.0
+    if not customer_covers_supervisors:
         share = (float(effective_pct) / 100.0) / max(1, int(contracts_overseen))
-        instructor_m_total = sum(((s / 12.0) * share) for s in supervisor_salaries)
-        if instructor_m_total > 0:
-            rows.append(("Instructors", instructor_m_total))
+        instructor_cost = sum((s / 12.0) * share for s in supervisor_salaries)
+    breakdown["Instructors"] = instructor_cost
 
-    # Overheads (61%) – base either shadow Band 3 (if customer provides) or instructor cost
+    # Overheads based on 61%
     if customer_covers_supervisors:
         shadow = BAND3_COSTS.get(region, BAND3_COSTS["National"])
-        overhead_base_m = (shadow / 12.0) * (float(effective_pct) / 100.0)
+        overhead_base = (shadow / 12.0) * (float(effective_pct) / 100.0)
     else:
-        overhead_base_m = instructor_m_total
+        overhead_base = instructor_cost
 
     if lock_overheads and supervisor_salaries:
-        overhead_base_m = (max(supervisor_salaries) / 12.0) * (float(effective_pct) / 100.0)
+        overhead_base = (max(supervisor_salaries) / 12.0) * (float(effective_pct) / 100.0)
 
-    overheads_m = overhead_base_m * 0.61
-    rows.append(("Overheads (61%)", overheads_m))
+    overheads_m = overhead_base * 0.61
+    breakdown["Overheads (61%)"] = overheads_m
 
-    # Development charge (Commercial only) – show base, reduction, revised
-    if customer_type == "Commercial":
-        base_dev_rate = 0.20
-        reduction_rate = base_dev_rate - float(dev_rate)
-        base_dev = overheads_m * base_dev_rate
-        reduction_amount = overheads_m * reduction_rate
-        revised_dev = overheads_m * float(dev_rate)
+    # Development charge (Commercial only)
+    dev_charge = overheads_m * (float(dev_rate) if customer_type == "Commercial" else 0.0)
+    if dev_charge > 0:
+        breakdown["Development charge (applied)"] = dev_charge
+        if dev_rate < 0.20:
+            reduction = overheads_m * 0.20 - dev_charge
+            breakdown["Development charge reduction"] = -reduction
+            breakdown["Revised development charge"] = dev_charge
 
-        rows.append(("Development charge (20%)", base_dev))
-        if reduction_amount > 0:
-            rows.append(("Development charge reductions", -reduction_amount))
-        rows.append(("Revised development charge", revised_dev))
+    subtotal = sum(breakdown.values())
+    vat_amount = subtotal * 0.20
+    grand_total = subtotal + vat_amount
 
-    # Subtotal, VAT (20%), Grand Total (monthly)
-    subtotal = sum(v for _, v in rows)
-    vat = subtotal * 0.20
-    grand = subtotal + vat
-
-    rows.extend([
+    rows = list(breakdown.items()) + [
         ("Subtotal", subtotal),
-        ("VAT (20%)", vat),
-        ("Grand Total (£/month)", grand),
-    ])
+        ("VAT (20%)", vat_amount),
+        ("Grand Total (£/month)", grand_total),
+    ]
+    host_df = pd.DataFrame(rows, columns=["Item", "Amount (£)"])
 
-    df = pd.DataFrame(rows, columns=["Item", "Amount (£)"])
-    ctx = {"rows": rows}
-    return df, ctx
+    ctx = {
+        "rows": rows,
+        "subtotal": subtotal,
+        "vat_amount": vat_amount,
+        "grand_total": grand_total,
+    }
+    return host_df, ctx
