@@ -2,9 +2,8 @@
 from typing import List, Dict, Optional
 from datetime import date, timedelta
 import math
-
+import pandas as pd
 from tariff61 import BAND3_COSTS
-from config61 import CFG
 
 # ---------- Helpers ----------
 def labour_minutes_budget(num_pris: int, hours: float) -> float:
@@ -12,13 +11,10 @@ def labour_minutes_budget(num_pris: int, hours: float) -> float:
     return max(0.0, float(num_pris) * float(hours) * 60.0)
 
 def _working_days_between(start: date, end: date) -> int:
-    """Inclusive working days (Mon–Fri) between two dates."""
-    if end < start:
-        return 0
+    if end < start: return 0
     days, d = 0, start
     while d <= end:
-        if d.weekday() < 5:
-            days += 1
+        if d.weekday() < 5: days += 1
         d += timedelta(days=1)
     return days
 
@@ -97,10 +93,8 @@ def calculate_production_contractual(
         if pricing_mode == "target":
             tgt = 0
             if targets and idx < len(targets):
-                try:
-                    tgt = int(targets[idx])
-                except Exception:
-                    tgt = 0
+                try: tgt = int(targets[idx])
+                except Exception: tgt = 0
             units_for_pricing = float(tgt)
         else:
             units_for_pricing = capacity_units
@@ -118,7 +112,7 @@ def calculate_production_contractual(
                 f"available {available_minutes_item:,.0f} mins; exceeds capacity."
             )
 
-        # Unit prices and monthly totals (VAT not shown here; unit price inc VAT if Commercial)
+        # Unit prices and monthly totals
         unit_cost_ex_vat = (weekly_cost_item / units_for_pricing) if units_for_pricing > 0 else None
         unit_price_ex_vat = unit_cost_ex_vat
         unit_price_inc_vat = (unit_price_ex_vat * 1.20) if (unit_price_ex_vat and customer_type == "Commercial") else unit_price_ex_vat
@@ -205,7 +199,6 @@ def calculate_adhoc(
 
         total_line_minutes = int(ln["units"]) * mins_per_unit
         total_job_minutes += total_line_minutes
-
         wd_available = _working_days_between(today, ln["deadline"])
         if earliest_wd_available is None or wd_available < earliest_wd_available:
             earliest_wd_available = wd_available
