@@ -87,5 +87,12 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
     df_fmt = df.copy()
     for col in df_fmt.columns:
         if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand", "VAT"]):
-            df_fmt[col] = df_fmt[col].apply(
-                lambda x: fmt_currency(str(x).replace("£
+            def try_format(x):
+                try:
+                    return fmt_currency(str(x).replace("£", "").replace(",", ""))
+                except Exception:
+                    return x
+            df_fmt[col] = df_fmt[col].apply(lambda x: try_format(x) if pd.notnull(x) else "")
+
+    cls = "custom highlight" if highlight else "custom"
+    return df_fmt.to_html(index=False, classes=cls, border=0, justify="left", escape=False)
