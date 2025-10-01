@@ -32,8 +32,8 @@ def inject_govuk_css():
 
       /* Centered results tables */
       .results-table { max-width: 900px; margin: 1rem auto; }
-      .results-table table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-      .results-table th, .results-table td { border-bottom: 1px solid #b1b4b6; padding: 8px; text-align: left; }
+      .results-table table { width: auto; border-collapse: collapse; margin: 12px auto; }
+      .results-table th, .results-table td { border-bottom: 1px solid #b1b4b6; padding: 8px 12px; text-align: left; }
       .results-table th { background: #f3f2f1; }
       .results-table td.neg { color: #d4351c; }
       .results-table tr.total td { font-weight: 700; }
@@ -51,9 +51,11 @@ def sidebar_controls(default_output: int, show_output_slider: bool = True, rec_p
         st.header("Controls")
         lock_overheads = st.checkbox("Lock overheads to highest instructor salary", value=False)
 
-        # Instructor allocation (%). If a recommendation is passed, use it as default (capped 100).
+        # Instructor allocation (%). Use recommendation if passed, capped 100.
         default_alloc = min(100, int(rec_pct)) if isinstance(rec_pct, (int, float)) else 100
         instructor_pct = st.slider("Instructor allocation (%)", 0, 100, default_alloc)
+        if rec_pct is not None:
+            st.caption(f"Recommended allocation = {rec_pct}% (based on hours/contracts, capped at 100%)")
 
         prisoner_output = 100
         if show_output_slider:
@@ -73,7 +75,7 @@ def export_doc(title: str, meta: dict, body_html: str) -> BytesIO:
     css = """
       <style>
         body{font-family:Arial,Helvetica,sans-serif;color:#0b0c0c;margin:20px;}
-        table{width:100%;border-collapse:collapse;margin:12px 0;}
+        table{width:auto;max-width:900px;margin:12px auto;border-collapse:collapse;}
         th,td{border-bottom:1px solid #b1b4b6;padding:8px;text-align:left;}
         th{background:#f3f2f1;} td.neg{color:#d4351c;} tr.total td{font-weight:700;}
         h1,h2,h3{margin:0.2rem 0;}
