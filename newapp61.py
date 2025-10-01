@@ -349,3 +349,18 @@ if contract_type == "Production":
         with c2: 
             st.download_button(
                 "Download PDF-ready HTML
+c1, c2 = st.columns(2)
+        with c1: 
+            st.download_button(
+                "Download CSV (Production)",
+                data=export_csv_bytes(df),
+                file_name="production_quote.csv",
+                mime="text/csv"
+            )
+        with c2: 
+            st.download_button(
+                "Download PDF-ready HTML (Production)",
+                data=export_html(None, df, title="Production Quote", extra_note=extra_note, adjusted_df=df_adj),
+                file_name="production_quote.html",
+                mime="text/html"
+            )
