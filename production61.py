@@ -44,12 +44,6 @@ def calculate_production_contractual(
     num_prisoners: int,
     contracts_overseen: int,
 ) -> Dict:
-    """
-    Returns a dict with:
-      - per_item: list of rows
-      - df: DataFrame of rows (for CSV/HTML export)
-      - minutes: {available_100, available_planned, used_planned}
-    """
 
     # Instructor weekly cost (apportioned by contracts & effective %)
     if customer_covers_supervisors or len(supervisor_salaries) == 0:
@@ -115,7 +109,6 @@ def calculate_production_contractual(
             units_for_pricing = capacity_units
 
         # Minutes feasibility
-        output_scale = float(output_pct) / 100.0
         available_minutes_item = pris_assigned * workshop_hours * 60.0 * output_scale
         required_minutes_item  = units_for_pricing * mins_per_unit * pris_required
         feasible = (required_minutes_item <= (available_minutes_item + 1e-6))
@@ -150,126 +143,11 @@ def calculate_production_contractual(
             "Note": note,
         })
 
-    # Return rows, totals, and minutes info
-    try:
-        import pandas as pd
-        df = pd.DataFrame(per_rows)
-    except Exception:
-        df = None
-
     return {
         "per_item": per_rows,
-        "df": df,
         "minutes": {
             "available_100": available_100,
             "available_planned": available_planned,
             "used_planned": used_planned_total,
         }
-    }
-
-
-# ---------- Ad-hoc ----------
-def calculate_adhoc(
-    lines: List[Dict],
-    output_pct: int,
-    *,
-    workshop_hours: float,
-    num_prisoners: int,
-    prisoner_salary: float,
-    supervisor_salaries: List[float],
-    effective_pct: float,
-    customer_covers_supervisors: bool,
-    region: str,
-    customer_type: str,
-    dev_rate: float,
-    lock_overheads: bool,
-    contracts_overseen: int,
-    today: date,
-) -> Dict:
-    """
-    lines: [{name, units, deadline (date), pris_per_item, mins_per_item}]
-    Returns:
-      {
-        "per_line": [...],
-        "totals": {"ex_vat": float, "inc_vat": float},
-        "capacity": {"current_daily_capacity": float, "minutes_per_week_capacity": float},
-        "feasibility": {"earliest_wd_available": int, "wd_needed_all": int, "hard_block": bool, "reason": str|None}
-      }
-    """
-
-    output_scale = float(output_pct) / 100.0
-    hours_per_day = float(workshop_hours) / 5.0 if workshop_hours else 0.0
-    daily_minutes_capacity_per_prisoner = hours_per_day * 60.0 * output_scale
-    current_daily_capacity = num_prisoners * daily_minutes_capacity_per_prisoner
-    minutes_per_week_capacity = max(1e-9, num_prisoners * float(workshop_hours) * 60.0 * output_scale)
-
-    # Instructor weekly cost (apportioned)
-    if customer_covers_supervisors or len(supervisor_salaries) == 0:
-        inst_weekly_total = 0.0
-    else:
-        share = (float(effective_pct) / 100.0) / max(1, int(contracts_overseen))
-        inst_weekly_total = sum((s / 52.0) * share for s in supervisor_salaries)
-
-    # Overhead base
-    if customer_covers_supervisors:
-        shadow = BAND3_COSTS.get(region, BAND3_COSTS["National"])
-        overhead_base = (shadow / 52.0) * (float(effective_pct) / 100.0)
-    else:
-        overhead_base = inst_weekly_total
-
-    if lock_overheads and supervisor_salaries:
-        overhead_base = (max(supervisor_salaries) / 52.0) * (float(effective_pct) / 100.0)
-
-    overheads_weekly = overhead_base * 0.61
-    dev_weekly_total = overheads_weekly * (float(dev_rate) if customer_type == "Commercial" else 0.0)
-
-    prisoners_weekly_cost = num_prisoners * prisoner_salary
-    weekly_cost_total = prisoners_weekly_cost + inst_weekly_total + overheads_weekly + dev_weekly_total
-    cost_per_minute = weekly_cost_total / minutes_per_week_capacity if minutes_per_week_capacity > 0 else 0.0
-
-    per_line, total_job_minutes, earliest_wd_available = [], 0.0, None
-    for ln in lines:
-        mins_per_unit = float(ln["mins_per_item"]) * int(ln["pris_per_item"])
-        unit_cost_ex_vat = cost_per_minute * mins_per_unit
-        unit_cost_inc_vat = (unit_cost_ex_vat * 1.20) if customer_type == "Commercial" else unit_cost_ex_vat
-
-        total_line_minutes = int(ln["units"]) * mins_per_unit
-        total_job_minutes += total_line_minutes
-
-        # Feasibility by earliest deadline
-        wd_available = _working_days_between(today, ln["deadline"])
-        if earliest_wd_available is None or wd_available < earliest_wd_available:
-            earliest_wd_available = wd_available
-        wd_needed_line_alone = math.ceil(total_line_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
-
-        per_line.append({
-            "name": ln["name"],
-            "units": int(ln["units"]),
-            "unit_cost_ex_vat": unit_cost_ex_vat,
-            "unit_cost_inc_vat": unit_cost_inc_vat,
-            "line_total_ex_vat": unit_cost_ex_vat * int(ln["units"]),
-            "line_total_inc_vat": unit_cost_inc_vat * int(ln["units"]),
-            "wd_available": wd_available,
-            "wd_needed_line_alone": wd_needed_line_alone,
-        })
-
-    wd_needed_all = math.ceil(total_job_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
-    earliest_wd_available = earliest_wd_available or 0
-    available_total_minutes_by_deadline = current_daily_capacity * earliest_wd_available
-    hard_block = total_job_minutes > available_total_minutes_by_deadline
-    reason = None
-    if hard_block:
-        reason = (
-            f"Requested total minutes ({total_job_minutes:,.0f}) exceed available minutes by the earliest deadline "
-            f"({available_total_minutes_by_deadline:,.0f}). Reduce units, add prisoners, increase hours, extend deadline or lower Output%."
-        )
-
-    totals_ex = sum(p["line_total_ex_vat"] for p in per_line)
-    totals_inc = sum(p["line_total_inc_vat"] for p in per_line)
-
-    return {
-        "per_line": per_line,
-        "totals": {"ex_vat": totals_ex, "inc_vat": totals_inc},
-        "capacity": {"current_daily_capacity": current_daily_capacity, "minutes_per_week_capacity": minutes_per_week_capacity},
-        "feasibility": {"earliest_wd_available": earliest_wd_available, "wd_needed_all": wd_needed_all, "hard_block": hard_block, "reason": reason},
     }
