@@ -26,19 +26,19 @@ def calculate_production_contractual(
     workshop_hours: float,
     prisoner_salary: float,
     supervisor_salaries: List[float],
-    effective_pct: float,                 # instructor allocation %
+    effective_pct: float,
     customer_covers_supervisors: bool,
     region: str,
     customer_type: str,
-    dev_rate: float,                      # 0..0.2 after reductions; only applied when Commercial
-    pricing_mode: str,                    # "as-is" or "target"
+    dev_rate: float,
+    pricing_mode: str,
     targets: Optional[List[int]],
     lock_overheads: bool,
     num_prisoners: int,
     contracts_overseen: int,
 ) -> Dict:
 
-    # Instructor weekly cost (apportioned by contracts & effective %)
+    # Instructor weekly cost
     if customer_covers_supervisors or len(supervisor_salaries) == 0:
         inst_weekly_total = 0.0
     else:
@@ -63,25 +63,20 @@ def calculate_production_contractual(
     output_scale = float(output_pct) / 100.0
     available_planned = available_100 * output_scale
 
-    # Denominator for cost shares
     denom = sum(int(it.get("assigned", 0)) * workshop_hours * 60.0 for it in items)
 
     per_rows: List[Dict] = []
-    used_planned_total = 0.0
-
     for idx, it in enumerate(items):
         name = (it.get("name") or "").strip() or f"Item {idx+1}"
         mins_per_unit = float(it.get("minutes", 0))
         pris_required = int(it.get("required", 1))
         pris_assigned = int(it.get("assigned", 0))
 
-        # Capacity
         cap_100 = 0.0
         if pris_assigned > 0 and mins_per_unit > 0 and pris_required > 0 and workshop_hours > 0:
             cap_100 = (pris_assigned * workshop_hours * 60.0) / (mins_per_unit * pris_required)
         capacity_units = cap_100 * output_scale
 
-        # Share of weekly costs
         share = ((pris_assigned * workshop_hours * 60.0) / denom) if denom > 0 else 0.0
         prisoner_weekly_item = pris_assigned * prisoner_salary
         inst_weekly_item      = inst_weekly_total * share
@@ -89,7 +84,6 @@ def calculate_production_contractual(
         dev_weekly_item       = dev_weekly_total * share
         weekly_cost_item      = prisoner_weekly_item + inst_weekly_item + overheads_weekly_item + dev_weekly_item
 
-        # Units for pricing
         if pricing_mode == "target":
             tgt = 0
             if targets and idx < len(targets):
@@ -99,11 +93,9 @@ def calculate_production_contractual(
         else:
             units_for_pricing = capacity_units
 
-        # Minutes feasibility
         available_minutes_item = pris_assigned * workshop_hours * 60.0 * output_scale
         required_minutes_item  = units_for_pricing * mins_per_unit * pris_required
         feasible = (required_minutes_item <= (available_minutes_item + 1e-6))
-        used_planned_total += min(required_minutes_item, available_minutes_item)
 
         note = None
         if pricing_mode == "target" and not feasible:
@@ -112,7 +104,6 @@ def calculate_production_contractual(
                 f"available {available_minutes_item:,.0f} mins; exceeds capacity."
             )
 
-        # Unit prices and monthly totals
         unit_cost_ex_vat = (weekly_cost_item / units_for_pricing) if units_for_pricing > 0 else None
         unit_price_ex_vat = unit_cost_ex_vat
         unit_price_inc_vat = (unit_price_ex_vat * 1.20) if (unit_price_ex_vat and customer_type == "Commercial") else unit_price_ex_vat
@@ -131,16 +122,12 @@ def calculate_production_contractual(
             "Monthly Total ex VAT (£)": monthly_total_ex_vat,
             "Monthly Total inc VAT (£)": monthly_total_inc_vat,
             "Feasible": feasible if pricing_mode == "target" else None,
-            "Note": note,
+            "Note": note if pricing_mode == "target" else None,
         })
 
     return {
         "per_item": per_rows,
-        "minutes": {
-            "available_100": available_100,
-            "available_planned": available_planned,
-            "used_planned": used_planned_total,
-        }
+        "minutes": {"available_100": available_100, "available_planned": available_planned}
     }
 
 # ---------- Ad-hoc ----------
@@ -188,7 +175,6 @@ def calculate_adhoc(
     dev_weekly_total = overheads_weekly * (float(dev_rate) if customer_type == "Commercial" else 0.0)
     prisoners_weekly_cost = num_prisoners * prisoner_salary
     weekly_cost_total = prisoners_weekly_cost + inst_weekly_total + overheads_weekly + dev_weekly_total
-
     cost_per_minute = weekly_cost_total / minutes_per_week_capacity
 
     per_line, total_job_minutes, earliest_wd_available = [], 0.0, None
@@ -219,12 +205,24 @@ def calculate_adhoc(
     earliest_wd_available = earliest_wd_available or 0
     available_total_minutes_by_deadline = current_daily_capacity * earliest_wd_available
     hard_block = total_job_minutes > available_total_minutes_by_deadline
-    reason = None
+
+    advice = None
     if hard_block:
-        reason = (
-            f"Requested total minutes ({total_job_minutes:,.0f}) exceed available minutes by the earliest deadline "
-            f"({available_total_minutes_by_deadline:,.0f}). Reduce units, add prisoners, increase hours, extend deadline or lower Output%."
+        deficit = total_job_minutes - available_total_minutes_by_deadline
+        extra_pris = math.ceil(deficit / (hours_per_day * 60.0 * earliest_wd_available)) if earliest_wd_available > 0 else None
+        extra_days = math.ceil(deficit / current_daily_capacity) if current_daily_capacity > 0 else None
+        advice = (
+            f"Requested {total_job_minutes:,.0f} mins > available {available_total_minutes_by_deadline:,.0f} mins by deadline. "
+            f"To meet demand, add {extra_pris or '?'} prisoner(s) or extend deadline by {extra_days or '?'} working day(s)."
         )
+    else:
+        finish_days = math.ceil(total_job_minutes / current_daily_capacity) if current_daily_capacity > 0 else 0
+        finish_date = today
+        days_added = 0
+        while days_added < finish_days:
+            finish_date += timedelta(days=1)
+            if finish_date.weekday() < 5: days_added += 1
+        advice = f"Earliest ready date: {finish_date.isoformat()}"
 
     totals_ex = sum(p["line_total_ex_vat"] for p in per_line)
     totals_inc = sum(p["line_total_inc_vat"] for p in per_line)
@@ -233,5 +231,5 @@ def calculate_adhoc(
         "per_line": per_line,
         "totals": {"ex_vat": totals_ex, "inc_vat": totals_inc},
         "capacity": {"current_daily_capacity": current_daily_capacity, "minutes_per_week_capacity": minutes_per_week_capacity},
-        "feasibility": {"earliest_wd_available": earliest_wd_available, "wd_needed_all": wd_needed_all, "hard_block": hard_block, "reason": reason},
+        "feasibility": {"hard_block": hard_block, "advice": advice},
     }
