@@ -46,7 +46,7 @@ PRISON_TO_REGION = {
     "Wormwood Scrubs": "Inner London", "Wymott": "National",
 }
 
-# Band 3 shadow costs (annual) — used if customer provides instructor(s)
+# Band 3 shadow costs (annual)
 BAND3_COSTS = {
     "Outer London": 45855.97,
     "Inner London": 49202.70,
