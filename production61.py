@@ -1,5 +1,6 @@
 from typing import List, Dict, Optional
-from datetime import date
+from datetime import date, timedelta
+import math
 import pandas as pd
 from utils61 import fmt_currency
 
@@ -135,6 +136,14 @@ def calculate_production_contractual(
     return results
 
 # ---------- Ad-hoc ----------
+def _working_days_between(start: date, end: date) -> int:
+    if end < start: return 0
+    days, d = 0, start
+    while d <= end:
+        if d.weekday() < 5: days += 1
+        d += timedelta(days=1)
+    return days
+
 def calculate_adhoc(
     lines: List[Dict],
     output_pct: int,
@@ -154,13 +163,81 @@ def calculate_adhoc(
     lock_overheads: bool,
     employment_support: str,
 ) -> Dict:
-    # keep your existing implementation
-    # (returns per_line, totals, feasibility)
-    return {}
+    output_scale = float(output_pct) / 100.0
+    hours_per_day = float(workshop_hours) / 5.0
+    daily_minutes_capacity_per_prisoner = hours_per_day * 60.0 * output_scale
+    current_daily_capacity = num_prisoners * daily_minutes_capacity_per_prisoner
+    minutes_per_week_capacity = max(1e-9, num_prisoners * workshop_hours * 60.0 * output_scale)
+
+    prisoners_weekly_cost = num_prisoners * prisoner_salary
+    inst_weekly_total = sum((s / 52.0) * (effective_pct / 100.0) for s in supervisor_salaries) if not customer_covers_supervisors else 0.0
+
+    shadow = BAND3_COSTS.get(region, 42247.81)
+    overhead_base = (shadow / 52.0) * (effective_pct / 100.0) if customer_covers_supervisors else inst_weekly_total
+    if lock_overheads and supervisor_salaries:
+        overhead_base = (max(supervisor_salaries) / 52.0) * (effective_pct / 100.0)
+    overheads_weekly = overhead_base * 0.61
+
+    dev_rate_final = 0.20
+    if employment_support == "Employment on release/RoTL":
+        dev_rate_final -= 0.10
+    elif employment_support == "Post release":
+        dev_rate_final -= 0.10
+    elif employment_support == "Both":
+        dev_rate_final -= 0.20
+    dev_rate_final = max(dev_rate_final, 0.0)
+
+    dev_weekly_total = overheads_weekly * dev_rate_final if customer_type == "Commercial" else 0.0
+    weekly_cost_total = prisoners_weekly_cost + inst_weekly_total + overheads_weekly + dev_weekly_total
+    cost_per_minute = weekly_cost_total / minutes_per_week_capacity
+
+    per_line, total_job_minutes, earliest_wd_available = [], 0.0, None
+    for ln in lines:
+        mins_per_unit = float(ln["mins_per_item"]) * int(ln["pris_per_item"])
+        unit_cost_ex_vat = cost_per_minute * mins_per_unit
+        unit_cost_inc_vat = unit_cost_ex_vat * (1 + (vat_rate / 100.0)) if customer_type == "Commercial" and apply_vat else unit_cost_ex_vat
+
+        total_line_minutes = int(ln["units"]) * mins_per_unit
+        total_job_minutes += total_line_minutes
+        wd_available = _working_days_between(today, ln["deadline"])
+        if earliest_wd_available is None or wd_available < earliest_wd_available:
+            earliest_wd_available = wd_available
+        wd_needed_line_alone = math.ceil(total_line_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
+
+        per_line.append({
+            "name": ln["name"],
+            "units": int(ln["units"]),
+            "unit_cost_ex_vat": unit_cost_ex_vat,
+            "unit_cost_inc_vat": unit_cost_inc_vat,
+            "line_total_ex_vat": unit_cost_ex_vat * int(ln["units"]),
+            "line_total_inc_vat": unit_cost_inc_vat * int(ln["units"]),
+            "wd_available": wd_available,
+            "wd_needed_line_alone": wd_needed_line_alone,
+        })
+
+    wd_needed_all = math.ceil(total_job_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
+    earliest_wd_available = earliest_wd_available or 0
+    available_total_minutes_by_deadline = current_daily_capacity * earliest_wd_available
+    hard_block = total_job_minutes > available_total_minutes_by_deadline
+    reason = None
+    if hard_block:
+        reason = (
+            f"Requested total minutes ({total_job_minutes:,.0f}) exceed available minutes by the earliest deadline "
+            f"({available_total_minutes_by_deadline:,.0f})."
+        )
+
+    totals_ex = sum(p["line_total_ex_vat"] for p in per_line)
+    totals_inc = sum(p["line_total_inc_vat"] for p in per_line)
+
+    return {
+        "per_line": per_line,
+        "totals": {"ex_vat": totals_ex, "inc_vat": totals_inc},
+        "capacity": {"current_daily_capacity": current_daily_capacity, "minutes_per_week_capacity": minutes_per_week_capacity},
+        "feasibility": {"earliest_wd_available": earliest_wd_available, "wd_needed_all": wd_needed_all, "hard_block": hard_block, "reason": reason},
+    }
 
 # ---------- Ad-hoc Table Builder ----------
 def build_adhoc_table(result):
-    """Turn calculate_adhoc() result into a DataFrame + totals."""
     per_line = result.get("per_line", [])
     col_headers = [
         "Item", "Units",
