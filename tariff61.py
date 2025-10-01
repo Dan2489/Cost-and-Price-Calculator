@@ -1,5 +1,5 @@
 # tariff61.py
-# Full Prison -> Region mapping and Supervisor pay bands + Band 3 shadow costs
+# Full Prison -> Region mapping and Supervisor pay bands + Band 3 shadow costs.
 
 PRISON_TO_REGION = {
     "Altcourse": "National", "Ashfield": "National", "Askham Grange": "National",
@@ -46,7 +46,6 @@ PRISON_TO_REGION = {
     "Wormwood Scrubs": "Inner London", "Wymott": "National",
 }
 
-# Average total salaries used for selections when customer does NOT provide instructors
 SUPERVISOR_PAY = {
     "Inner London": [
         {"title": "Production Instructor: Band 3", "avg_total": 49202.70},
