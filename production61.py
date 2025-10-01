@@ -2,12 +2,10 @@
 from typing import List, Dict, Optional
 from datetime import date, timedelta
 import math
-import pandas as pd
 from tariff61 import BAND3_COSTS
 
 # ---------- Helpers ----------
 def labour_minutes_budget(num_pris: int, hours: float) -> float:
-    """Available labour minutes per week at 100% output."""
     return max(0.0, float(num_pris) * float(hours) * 60.0)
 
 def _working_days_between(start: date, end: date) -> int:
@@ -38,14 +36,14 @@ def calculate_production_contractual(
     contracts_overseen: int,
 ) -> Dict:
 
-    # Instructor weekly cost
+    # Instructor cost
     if customer_covers_supervisors or len(supervisor_salaries) == 0:
         inst_weekly_total = 0.0
     else:
         share = (float(effective_pct) / 100.0) / max(1, int(contracts_overseen))
         inst_weekly_total = sum((s / 52.0) * share for s in supervisor_salaries)
 
-    # Overhead base (61% rule)
+    # Overheads (61%)
     if customer_covers_supervisors:
         shadow = BAND3_COSTS.get(region, BAND3_COSTS["National"])
         overhead_base = (shadow / 52.0) * (float(effective_pct) / 100.0)
@@ -58,7 +56,7 @@ def calculate_production_contractual(
     overheads_weekly = overhead_base * 0.61
     dev_weekly_total = overheads_weekly * (float(dev_rate) if customer_type == "Commercial" else 0.0)
 
-    # Minutes budget
+    # Minutes
     available_100 = labour_minutes_budget(num_prisoners, workshop_hours)
     output_scale = float(output_pct) / 100.0
     available_planned = available_100 * output_scale
@@ -188,17 +186,14 @@ def calculate_adhoc(
         wd_available = _working_days_between(today, ln["deadline"])
         if earliest_wd_available is None or wd_available < earliest_wd_available:
             earliest_wd_available = wd_available
-        wd_needed_line_alone = math.ceil(total_line_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
 
         per_line.append({
-            "name": ln["name"],
-            "units": int(ln["units"]),
-            "unit_cost_ex_vat": unit_cost_ex_vat,
-            "unit_cost_inc_vat": unit_cost_inc_vat,
-            "line_total_ex_vat": unit_cost_ex_vat * int(ln["units"]),
-            "line_total_inc_vat": unit_cost_inc_vat * int(ln["units"]),
-            "wd_available": wd_available,
-            "wd_needed_line_alone": wd_needed_line_alone,
+            "Item": ln["name"],
+            "Units": int(ln["units"]),
+            "Unit Cost ex VAT (£)": unit_cost_ex_vat,
+            "Unit Cost inc VAT (£)": unit_cost_inc_vat,
+            "Total ex VAT (£)": unit_cost_ex_vat * int(ln["units"]),
+            "Total inc VAT (£)": unit_cost_inc_vat * int(ln["units"]),
         })
 
     wd_needed_all = math.ceil(total_job_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
@@ -222,10 +217,10 @@ def calculate_adhoc(
         while days_added < finish_days:
             finish_date += timedelta(days=1)
             if finish_date.weekday() < 5: days_added += 1
-        advice = f"Earliest ready date: {finish_date.isoformat()}"
+        advice = f"Earliest ready date: {finish_date.strftime('%d/%m/%Y')}"
 
-    totals_ex = sum(p["line_total_ex_vat"] for p in per_line)
-    totals_inc = sum(p["line_total_inc_vat"] for p in per_line)
+    totals_ex = sum(p["Total ex VAT (£)"] for p in per_line)
+    totals_inc = sum(p["Total inc VAT (£)"] for p in per_line)
 
     return {
         "per_line": per_line,
