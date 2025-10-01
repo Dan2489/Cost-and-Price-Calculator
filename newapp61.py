@@ -54,6 +54,9 @@ def main():
         CFG.GLOBAL_OUTPUT_DEFAULT, show_output_slider=show_output, rec_pct=recomm_pct
     )
 
+    if recomm_pct is not None:
+        st.info(f"Instructor allocation currently set to {instructor_pct}%. Recommended value: {recomm_pct}% (adjust in sidebar if required).")
+
     # Dev rate
     if customer_type == "Another Government Department":
         dev_rate = 0.0
@@ -101,6 +104,7 @@ def main():
             available_100 = labour_minutes_budget(int(num_prisoners), float(workshop_hours))
             available_planned = available_100 * (float(prisoner_output) / 100.0)
             st.markdown(f"Available Labour minutes per week @ {prisoner_output}% output = {available_planned:,.0f} minutes")
+            st.caption("Unit costs are based on 100% labour output. Adjust labour output in the sidebar if necessary.")
 
             items, targets = [], None
             running_assigned = 0
@@ -141,8 +145,14 @@ def main():
                     num_prisoners=int(num_prisoners),
                     contracts_overseen=int(contracts),
                 )
+
                 st.subheader("Production (Contractual)")
                 df = pd.DataFrame(out["per_item"])
+
+                # Drop Feasible/Note if pricing mode is "as-is"
+                if pricing_mode == "Maximum output":
+                    df = df.drop(columns=["Feasible", "Note"], errors="ignore")
+
                 st.markdown(_df_to_html_table(df), unsafe_allow_html=True)
                 st.download_button("Download PDF-ready HTML (Production – Contractual)",
                                    data=export_doc("Production – Contractual Quote", meta, _df_to_html_table(df)),
@@ -191,15 +201,20 @@ def main():
                     contracts_overseen=int(contracts),
                     today=date.today(),
                 )
-                if result["feasibility"]["hard_block"]:
-                    st.error(result["feasibility"]["reason"])
-                else:
-                    st.subheader("Production (Ad-hoc)")
-                    df = pd.DataFrame(result["per_line"])
-                    st.markdown(_df_to_html_table(df), unsafe_allow_html=True)
-                    st.download_button("Download PDF-ready HTML (Production – Ad-hoc)",
-                                       data=export_doc("Production – Ad-hoc Quote", meta, _df_to_html_table(df)),
-                                       file_name="production_adhoc.html", mime="text/html")
+                st.subheader("Production (Ad-hoc)")
+                df = pd.DataFrame(result["per_line"])
+                st.markdown(_df_to_html_table(df), unsafe_allow_html=True)
+
+                # Feasibility advice
+                if result["feasibility"]["advice"]:
+                    if result["feasibility"]["hard_block"]:
+                        st.error(result["feasibility"]["advice"])
+                    else:
+                        st.info(result["feasibility"]["advice"])
+
+                st.download_button("Download PDF-ready HTML (Production – Ad-hoc)",
+                                   data=export_doc("Production – Ad-hoc Quote", meta, _df_to_html_table(df)),
+                                   file_name="production_adhoc.html", mime="text/html")
 
     if st.button("Reset Selections"):
         for k in list(st.session_state.keys()):
