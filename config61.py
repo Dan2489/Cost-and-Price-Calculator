@@ -1,8 +1,10 @@
-# config61.py
-# Minimal config used by the app.
+from dataclasses import dataclass
 
-class Config:
-    GLOBAL_OUTPUT_DEFAULT = 100   # default prisoner labour output (%) for Production
-    VAT_RATE = 20.0               # VAT fixed at 20%
+@dataclass(frozen=True)
+class AppConfig:
+    DAYS_PER_MONTH: float = 365.0 / 12.0  # ≈30.42
+    FULL_UTILISATION_WEEK: float = 37.5   # reference week
+    DEFAULT_ADMIN_MONTHLY: float = 150.0
+    GLOBAL_OUTPUT_DEFAULT: int = 100      # prisoner output slider default
 
-CFG = Config()
+CFG = AppConfig()
