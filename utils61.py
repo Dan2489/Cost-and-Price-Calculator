@@ -10,33 +10,42 @@ def inject_govuk_css() -> None:
     st.markdown(
         """
         <style>
-          /* Sidebar sizing – allow it to actually close on mobile */
-          @media (min-width: 1200px) { [data-testid="stSidebar"] { width: 350px !important; } }
-          @media (max-width: 768px)  { [data-testid="stSidebar"] { width: auto !important; min-width: unset !important; max-width: unset !important; } }
+          /* Sidebar width: desktop fixed, mobile collapses properly */
+          [data-testid="stSidebar"] {
+            min-width: 280px !important;
+            max-width: 280px !important;
+          }
+          @media (max-width: 768px) {
+            [data-testid="stSidebar"] {
+              min-width: 0 !important;
+              max-width: 0 !important;
+            }
+          }
 
           :root { --govuk-green: #00703c; --govuk-yellow: #ffdd00; }
 
-          /* Buttons */
           .stButton > button {
             background: var(--govuk-green) !important; color: #fff !important;
             border: 2px solid transparent !important; border-radius: 0 !important; font-weight: 600;
           }
           .stButton > button:hover { filter: brightness(0.95); }
           .stButton > button:focus, .stButton > button:focus-visible {
-            outline: 3px solid var(--govuk-yellow) !important; outline-offset: 0 !important; box-shadow: 0 0 0 1px #000 inset !important;
+            outline: 3px solid var(--govuk-yellow) !important;
+            outline-offset: 0 !important; box-shadow: 0 0 0 1px #000 inset !important;
           }
 
-          /* Sliders */
           [data-testid="stSlider"] [role="slider"] {
-            background: var(--govuk-green) !important; border: 2px solid var(--govuk-green) !important; box-shadow: none !important;
+            background: var(--govuk-green) !important;
+            border: 2px solid var(--govuk-green) !important;
+            box-shadow: none !important;
           }
           [data-testid="stSlider"] [role="slider"]:focus,
           [data-testid="stSlider"] [role="slider"]:focus-visible {
-            outline: 3px solid var(--govuk-yellow) !important; outline-offset: 0 !important; box-shadow: 0 0 0 1px #000 inset !important;
+            outline: 3px solid var(--govuk-yellow) !important;
+            outline-offset: 0 !important; box-shadow: 0 0 0 1px #000 inset !important;
           }
-          [data-testid="stSlider"] div[aria-hidden="true"] > div > div { background-color: var(--govuk-green) !important; }
 
-          /* Results tables centered */
+          /* Tables */
           .results-table { max-width: 900px; margin: 1rem auto; }
           .results-table table { width: 100%; border-collapse: collapse; margin: 12px 0; }
           .results-table th, .results-table td { border-bottom: 1px solid #b1b4b6; padding: 8px; text-align: left; }
@@ -65,16 +74,22 @@ def sidebar_controls(global_output_default: int, workshop_hours: float = 37.5, c
         st.header("Controls")
         lock_overheads = st.checkbox("Lock overheads to highest instructor salary", value=False)
 
-        # Instructor allocation slider (recommended = (hours/37.5) * (1/contracts) * 100, capped at 100%)
+        # Instructor allocation recommendation
         rec = 0.0
         if workshop_hours > 0 and contracts > 0:
             rec = min(100.0, (workshop_hours / 37.5) * (1 / contracts) * 100.0)
-        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, int(round(rec)) if rec > 0 else 100)
+
+        instructor_pct = st.slider(
+            "Instructor allocation (%)", 0, 100,
+            int(round(rec)) if rec > 0 else 100
+        )
         if rec > 0:
             st.caption(f"Recommended: {rec:.0f}%")
 
-        # Prisoner labour output slider
-        prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, global_output_default)
+        # Prisoner labour output slider (only shown if Production in main app)
+        prisoner_output = st.slider(
+            "Prisoner labour output (%)", 0, 100, global_output_default
+        )
 
         return lock_overheads, instructor_pct, prisoner_output
 
@@ -95,13 +110,9 @@ def render_summary_table(rows, dev_reduction: bool = False) -> str:
     return f"<div class='results-table'><table><tr><th>Item</th><th>Amount (£)</th></tr>{''.join(body)}</table></div>"
 
 # ======================
-# Export HTML/PDF (single source)
+# Export HTML/PDF
 # ======================
 def export_doc(title: str, meta: dict, body_html: str) -> BytesIO:
-    """
-    Return BytesIO HTML with GOV.UK style + logo for both HTML/PDF exports.
-    Use GitHub raw URL for the logo so the file renders correctly outside Streamlit.
-    """
     css = """
       <style>
         body{font-family:Arial,Helvetica,sans-serif;color:#0b0c0c;margin:20px;}
@@ -113,7 +124,7 @@ def export_doc(title: str, meta: dict, body_html: str) -> BytesIO:
     """
     header_html = f"""
     <div style="display:flex; align-items:center; gap:15px; margin-bottom:1rem;">
-        <img src="https://raw.githubusercontent.com/Dan2489/Cost-and-Price-Calculator/main/logo.png" style="height:60px;">
+        <img src="https://raw.githubusercontent.com/Dan2489/Cost-and-Price-Calculator/main/logo.png" style="height:80px;">
         <h2>{title}</h2>
     </div>
     """
