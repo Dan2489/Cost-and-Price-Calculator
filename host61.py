@@ -1,6 +1,5 @@
 from typing import List, Dict, Tuple
 import pandas as pd
-from utils61 import fmt_currency
 
 def generate_host_quote(
     *,
@@ -15,20 +14,11 @@ def generate_host_quote(
     instructor_allocation: float = 100.0,
     lock_overheads: bool = False,
 ) -> Tuple[pd.DataFrame, Dict]:
-    """
-    Host quote calculation:
-    - Prisoner wages
-    - Instructor costs
-    - Overheads at 61%
-    - Development charge based on employment_support
-    """
 
     breakdown: Dict[str, float] = {}
 
-    # Prisoner wages (monthly)
     breakdown["Prisoner wages"] = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
 
-    # Instructor costs (monthly, apportioned by contracts and allocation)
     instructor_cost = 0.0
     if num_supervisors > 0:
         instructor_cost = sum(
@@ -37,14 +27,12 @@ def generate_host_quote(
         )
     breakdown["Instructors"] = instructor_cost
 
-    # Overheads: 61% of instructor cost (locked if requested)
     if lock_overheads and supervisor_salaries:
         overhead_base = (max(supervisor_salaries) / 12.0) * (instructor_allocation / 100.0) * (1.0 / contracts)
     else:
         overhead_base = instructor_cost
     breakdown["Overheads (61%)"] = overhead_base * 0.61
 
-    # Development charge (Commercial only: 20%, reduced for employment support)
     dev_rate = 0.20
     if employment_support == "Employment on release/RoTL":
         dev_rate = 0.10
@@ -59,19 +47,15 @@ def generate_host_quote(
         breakdown["Development charge reductions"] = -reduction
     breakdown["Revised development charge"] = overhead_base * dev_rate
 
-    # Subtotal
     subtotal = sum(breakdown.values())
     breakdown["Subtotal"] = subtotal
 
-    # VAT 20%
     vat_amount = subtotal * 0.20
     breakdown["VAT (20%)"] = vat_amount
 
-    # Grand total
     grand_total = subtotal + vat_amount
     breakdown["Grand Total (£/month)"] = grand_total
 
-    # Build DataFrame
     rows = [(k, v) for k, v in breakdown.items()]
     host_df = pd.DataFrame(rows, columns=["Item", "Amount (£)"])
 
