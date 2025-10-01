@@ -31,12 +31,12 @@ inject_govuk_css()
 def main():
     st.markdown('<div class="govuk-heading-l">Cost and Price Calculator</div>', unsafe_allow_html=True)
 
-    # Sidebar (unchanged behaviour)
+    # Sidebar
     lock_overheads, instructor_pct, prisoner_output = sidebar_controls(
         getattr(CFG, "GLOBAL_OUTPUT_DEFAULT", 100)
     )
 
-    # Base form (same questions/order as before)
+    # Base form
     prisons_sorted = list(PRISON_TO_REGION.keys())
     with st.form("contract_form"):
         prison = st.selectbox("Prison Name", options=prisons_sorted)
@@ -49,14 +49,14 @@ def main():
 
         num_supervisors = st.number_input("How many instructors?", min_value=0, step=1)
 
-        # Customer provides instructor(s)?
+        # ✅ Customer provides instructor(s)?
         customer_covers_supervisors = st.checkbox(
             "Customer provides instructor(s)?",
             value=False,
             key="customer_covers_supervisors"
         )
 
-        # Dynamic titles (appear immediately inside the form)
+        # Dynamic titles (only if customer does NOT provide)
         supervisor_salaries = []
         region = PRISON_TO_REGION.get(prison, "National")
         if num_supervisors > 0 and not customer_covers_supervisors:
@@ -80,24 +80,26 @@ def main():
     if not submitted:
         return
 
+    region = PRISON_TO_REGION.get(prison, "National")
+
     # ──────────────────────────────────────────────
     # HOST
     # ──────────────────────────────────────────────
     if contract_type == "Host":
         df, ctx = host61.generate_host_quote(
             workshop_hours=float(workshop_hours),
-            area_m2=0.0,                      # unused in 61% method; kept for signature compat
+            area_m2=0.0,                      # unused in 61% method
             usage_key="low",
             num_prisoners=int(num_prisoners),
             prisoner_salary=float(prisoner_salary),
             num_supervisors=int(num_supervisors),
-            customer_covers_supervisors=bool(customer_covers_supervisors),
+            customer_covers_supervisors=bool(customer_covers_supervisors),  # ✅ now passed in
             supervisor_salaries=supervisor_salaries,
             effective_pct=float(instructor_pct),
             customer_type="Commercial",
             apply_vat=True,
             vat_rate=20.0,
-            dev_rate=0.20,                    # reductions are applied inside host61 using employment_support
+            dev_rate=0.20,
             employment_support=employment_support,
             contracts_overseen=int(contracts_overseen),
             lock_overheads=bool(lock_overheads),
@@ -106,7 +108,7 @@ def main():
 
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Productivity what-if (post table)
+        # Productivity slider
         st.write("")
         prod = st.slider("Adjust for Productivity (%)", 50, 100, 100, key="host_prod_adj")
         factor = prod / 100.0
@@ -114,7 +116,7 @@ def main():
         df_adj = adjust_table(df, factor)
         st.markdown(render_table_html(df_adj, highlight=True), unsafe_allow_html=True)
 
-        # Download HTML (UTF-8)
+        # Download
         body = f"""
         <h1>Host Quote</h1>
         <p class="caption">Date: {date.today().strftime('%d/%m/%Y')}<br>
@@ -136,13 +138,11 @@ def main():
         return
 
     # ──────────────────────────────────────────────
-    # PRODUCTION (Contractual vs Ad-hoc handled by your existing functions)
+    # PRODUCTION
     # ──────────────────────────────────────────────
     prod_mode = st.radio("Production mode", ["Contractual", "Ad-hoc"], horizontal=True)
 
     if prod_mode == "Contractual":
-        st.info("Enter items above (as per your existing flow) and re-generate.")
-        # Expect items already captured elsewhere in your app/session.
         items = st.session_state.get("prod_items", [])
         if not items:
             st.warning("No items found. Please add items, then click Generate Costs.")
@@ -154,7 +154,7 @@ def main():
             prisoner_salary=float(prisoner_salary),
             supervisor_salaries=supervisor_salaries,
             effective_pct=float(instructor_pct),
-            customer_covers_supervisors=bool(customer_covers_supervisors),
+            customer_covers_supervisors=bool(customer_covers_supervisors),  # ✅ passed in
             region=region,
             customer_type="Commercial",
             apply_vat=True,
@@ -167,7 +167,6 @@ def main():
             lock_overheads=bool(lock_overheads),
         )
         df = pd.DataFrame(results)
-        # hide feasibility/note for contractual
         for col in ("Feasible", "Note"):
             if col in df.columns:
                 df.drop(columns=[col], inplace=True)
@@ -201,7 +200,6 @@ def main():
         return
 
     else:
-        # Ad-hoc path – relies on your existing calculate_adhoc
         adhoc_lines = st.session_state.get("adhoc_lines", [])
         if not adhoc_lines:
             st.warning("No ad-hoc lines found. Please add lines, then click Generate Costs.")
@@ -214,7 +212,7 @@ def main():
             prisoner_salary=float(prisoner_salary),
             supervisor_salaries=supervisor_salaries,
             effective_pct=float(instructor_pct),
-            customer_covers_supervisors=bool(customer_covers_supervisors),
+            customer_covers_supervisors=bool(customer_covers_supervisors),  # ✅ passed in
             customer_type="Commercial",
             apply_vat=True,
             vat_rate=20.0,
