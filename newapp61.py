@@ -1,34 +1,35 @@
 import streamlit as st
 import pandas as pd
+
 from config61 import CFG
+from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 import host61
 import production61
-from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from utils61 import (
     inject_govuk_css,
+    sidebar_controls,
     fmt_currency,
     export_csv_bytes,
     export_html,
-    sidebar_controls,
     render_table_html,
 )
 
-# -------------------------------------------------------------------
-# Page config + CSS
-# -------------------------------------------------------------------
+# -------------------------------
+# Page config + global CSS
+# -------------------------------
 st.set_page_config(page_title="Cost and Price Calculator", page_icon="💷", layout="centered")
 inject_govuk_css()
 
 st.title("Cost and Price Calculator")
 
-# -------------------------------------------------------------------
-# Sidebar controls
-# -------------------------------------------------------------------
+# -------------------------------
+# Sidebar (unchanged baseline)
+# -------------------------------
 lock_overheads, instructor_pct, prisoner_output = sidebar_controls(CFG.GLOBAL_OUTPUT_DEFAULT)
 
-# -------------------------------------------------------------------
-# Base Inputs
-# -------------------------------------------------------------------
+# -------------------------------
+# Base inputs (unchanged baseline)
+# -------------------------------
 prisons_sorted = ["Select"] + sorted(PRISON_TO_REGION.keys())
 prison_choice = st.selectbox("Prison Name", prisons_sorted, index=0, key="prison_choice")
 region = PRISON_TO_REGION.get(prison_choice, "Select") if prison_choice != "Select" else "Select"
@@ -43,6 +44,7 @@ prisoner_salary = st.number_input("Average prisoner salary per week (£)", min_v
 
 num_supervisors = st.number_input("How many instructors?", min_value=0, step=1)
 
+# Dynamic instructor titles (unchanged behaviour)
 supervisor_salaries = []
 if num_supervisors > 0 and region != "Select":
     titles_for_region = SUPERVISOR_PAY.get(region, [])
@@ -60,31 +62,30 @@ employment_support = st.selectbox(
     ["None", "Employment on release/RoTL", "Post release", "Both"],
 )
 
-# -------------------------------------------------------------------
-# Validation
-# -------------------------------------------------------------------
+# -------------------------------
+# Validation (unchanged baseline)
+# -------------------------------
 def validate_inputs():
     errors = []
-    if prison_choice == "Select":
-        errors.append("Select prison")
-    if region == "Select":
-        errors.append("Region could not be derived from prison selection")
-    if not str(customer_name).strip():
-        errors.append("Enter customer name")
-    if contract_type == "Select":
-        errors.append("Select contract type")
-    if workshop_hours <= 0:
-        errors.append("Workshop hours must be greater than zero")
-    if num_prisoners < 0:
-        errors.append("Prisoners employed cannot be negative")
+    if prison_choice == "Select": errors.append("Select prison")
+    if region == "Select": errors.append("Region could not be derived from prison selection")
+    if not str(customer_name).strip(): errors.append("Enter customer name")
+    if contract_type == "Select": errors.append("Select contract type")
+    if workshop_hours <= 0: errors.append("Workshop hours must be greater than zero")
+    if num_prisoners < 0: errors.append("Prisoners employed cannot be negative")
     if num_supervisors > 0 and len(supervisor_salaries) != num_supervisors:
         errors.append("Choose a title for each instructor")
     return errors
 
-# -------------------------------------------------------------------
+# -------------------------------
 # Helpers
-# -------------------------------------------------------------------
+# -------------------------------
 def _get_base_total(df: pd.DataFrame) -> float:
+    """
+    Safely find a total in either Host or Production tables.
+    Host: look for 'Grand Total' row in Amount (£)
+    Production: sum any monthly inc VAT total columns.
+    """
     try:
         if {"Item", "Amount (£)"}.issubset(df.columns):
             mask = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False)
@@ -99,9 +100,9 @@ def _get_base_total(df: pd.DataFrame) -> float:
         pass
     return 0.0
 
-# -------------------------------------------------------------------
-# HOST MODE
-# -------------------------------------------------------------------
+# -------------------------------
+# HOST
+# -------------------------------
 if contract_type == "Host":
     if st.button("Generate Host Costs"):
         errs = validate_inputs()
@@ -125,10 +126,9 @@ if contract_type == "Host":
 
     if "host_df" in st.session_state:
         df = st.session_state["host_df"]
-        ctx = st.session_state["host_ctx"]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Productivity slider
+        # Productivity slider (UI-only) — does not recalc, just scales displayed total & export note
         st.markdown("---")
         prod_host = st.slider(
             "Adjust for Productivity (%)",
@@ -157,15 +157,13 @@ if contract_type == "Host":
                                data=export_html(df, None, title="Host Quote", extra_note=extra_note),
                                file_name="host_quote.html", mime="text/html")
 
-# -------------------------------------------------------------------
-# PRODUCTION MODE
-# -------------------------------------------------------------------
+# -------------------------------
+# PRODUCTION (restored baseline)
+# -------------------------------
 if contract_type == "Production":
-    st.subheader("Production Settings")
-
-    prod_type = st.radio("Do you want contractual or ad-hoc costs?",
-                         ["Contractual", "Ad-hoc"], index=0)
-
+    # Full production workflow is implemented in production61; we pass baseline inputs only.
+    # The module is responsible for rendering its item forms (Contractual/Ad-hoc),
+    # performing validation/capacity checks, and returning the summary DataFrame + ctx.
     if st.button("Generate Production Costs"):
         errs = validate_inputs()
         if errs:
@@ -183,17 +181,15 @@ if contract_type == "Production":
                 instructor_allocation=instructor_pct,
                 lock_overheads=lock_overheads,
                 prisoner_output=prisoner_output,
-                prod_type=prod_type,
             )
             st.session_state["prod_df"] = df
             st.session_state["prod_ctx"] = ctx
 
     if "prod_df" in st.session_state:
         df = st.session_state["prod_df"]
-        ctx = st.session_state["prod_ctx"]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Productivity slider
+        # Productivity slider (UI-only)
         st.markdown("---")
         prod_prod = st.slider(
             "Adjust for Productivity (%)",
