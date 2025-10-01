@@ -210,4 +210,28 @@ def calculate_adhoc(
         deficit = total_job_minutes - available_total_minutes_by_deadline
         extra_pris = None
         if earliest_wd_available > 0:
-            extra_pris = math.ceil(def
+            extra_pris = math.ceil(deficit / (hours_per_day * 60.0 * earliest_wd_available))
+        extra_days = math.ceil(deficit / current_daily_capacity) if current_daily_capacity > 0 else None
+        advice = (
+            f"Requested {total_job_minutes:,.0f} mins > available {available_total_minutes_by_deadline:,.0f} mins by deadline. "
+            f"To meet demand, add {extra_pris or '?'} prisoner(s) or extend deadline by {extra_days or '?'} working day(s)."
+        )
+    else:
+        finish_days = math.ceil(total_job_minutes / current_daily_capacity) if current_daily_capacity > 0 else 0
+        finish_date = today
+        days_added = 0
+        while days_added < finish_days:
+            finish_date += timedelta(days=1)
+            if finish_date.weekday() < 5:
+                days_added += 1
+        advice = f"Earliest ready date: {finish_date.strftime('%d/%m/%Y')}"
+
+    totals_ex = sum(p["Total ex VAT (£)"] for p in per_line)
+    totals_inc = sum(p["Total inc VAT (£)"] for p in per_line)
+
+    return {
+        "per_line": per_line,
+        "totals": {"ex_vat": totals_ex, "inc_vat": totals_inc},
+        "capacity": {"current_daily_capacity": current_daily_capacity, "minutes_per_week_capacity": minutes_per_week_capacity},
+        "feasibility": {"hard_block": hard_block, "advice": advice},
+    }
