@@ -1,6 +1,7 @@
 # host61.py
 import pandas as pd
-from config61 import CFG
+from typing import Dict, List, Tuple
+
 from tariff61 import BAND3_COSTS
 
 def generate_host_quote(
@@ -9,82 +10,59 @@ def generate_host_quote(
     prisoner_salary: float,
     num_supervisors: int,
     customer_covers_supervisors: bool,
-    supervisor_salaries: list[float],
-    effective_pct: float,
+    supervisor_salaries: List[float],
+    effective_pct: float,         # instructor allocation %
     region: str,
     customer_type: str,
-    dev_rate: float,
+    dev_rate: float,              # already reduced per support; 0 if Another Government Department
     contracts_overseen: int,
     lock_overheads: bool,
-):
-    """
-    Host monthly breakdown using the 61% overhead model.
-    Overheads base = instructor cost base:
-      - If customer provides instructors: use Band 3 shadow salary for region (salary removed); apply effective_pct; then 61%.
-      - Else: use actual selected instructors (apportioned by contracts and effective_pct); then 61%.
-      - If lock_overheads=True and there are instructors: base uses the HIGHEST instructor salary (still paying all selected wages).
-    Dev charge:
-      - Applies only when customer_type == "Commercial"
-      - Base is 20%; reductions are reflected by dev_rate (after reductions)
-      - Show (20%), reductions (red), and revised dev charge.
-    """
-    rows: list[tuple[str, float]] = []
+) -> Tuple[pd.DataFrame, Dict]:
+
+    rows = []
 
     # Prisoner wages (monthly)
-    prisoner_monthly = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
-    rows.append(("Prisoner wages", prisoner_monthly))
+    prisoner_wages_m = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
+    rows.append(("Prisoner wages", prisoner_wages_m))
 
-    # Instructor monthly wages (added ONLY if customer doesn't provide)
-    if customer_covers_supervisors or num_supervisors == 0:
-        instructor_monthly = 0.0
-    else:
-        # Apportion each instructor by contracts and effective %
-        share = (float(effective_pct) / 100.0) / max(1, int(contracts_overseen))
-        instructor_monthly = sum((s / 12.0) * share for s in supervisor_salaries)
-    rows.append(("Instructors", instructor_monthly))
-
-    # Overheads monthly (61% of base)
+    # Instructor cost (monthly) – excluded if customer provides instructor(s)
     if customer_covers_supervisors:
-        shadow_annual = BAND3_COSTS.get(region, BAND3_COSTS["National"])
-        overhead_base_m = (shadow_annual / 12.0) * (float(effective_pct) / 100.0)
+        instructor_m_total = 0.0
     else:
-        overhead_base_m = instructor_monthly
+        share = (float(effective_pct) / 100.0) / max(1, int(contracts_overseen))
+        instructor_m_total = sum(((s / 12.0) * share) for s in supervisor_salaries)
+    if instructor_m_total > 0:
+        rows.append(("Instructors", instructor_m_total))
+
+    # Overheads (61%) – base either shadow Band 3 (if customer provides) or instructor cost
+    if customer_covers_supervisors:
+        shadow = BAND3_COSTS.get(region, BAND3_COSTS["National"])
+        overhead_base_m = (shadow / 12.0) * (float(effective_pct) / 100.0)
+    else:
+        overhead_base_m = instructor_m_total
 
     if lock_overheads and supervisor_salaries:
-        highest = max(supervisor_salaries)
-        overhead_base_m = (highest / 12.0) * (float(effective_pct) / 100.0)
+        overhead_base_m = (max(supervisor_salaries) / 12.0) * (float(effective_pct) / 100.0)
 
-    overheads_monthly = overhead_base_m * 0.61
-    rows.append(("Overheads (61%)", overheads_monthly))
+    overheads_m = overhead_base_m * 0.61
+    rows.append(("Overheads (61%)", overheads_m))
 
-    # Development charge (Commercial only): show 20%, reductions (red), revised
-    dev_to_add = 0.0
+    # Development charge (Commercial only) – show full, reductions (red), revised
+    dev_rows = []
     if customer_type == "Commercial":
-        base_dev = overheads_monthly * 0.20
-        applied_dev = overheads_monthly * float(dev_rate)
-        reduction = base_dev - applied_dev
-        rows.append(("Development charge (20%)", base_dev))
-        if reduction > 1e-8:
-            rows.append(("Development charge reductions", -reduction))  # render red in UI
-        rows.append(("Revised development charge", applied_dev))
-        dev_to_add = applied_dev
+        # The incoming dev_rate is already reduced (0.20 - selected reductions), we present components
+        # For display, we reconstruct "base" and "reductions"
+        base_dev_rate = 0.20
+        reduction_rate = base_dev_rate - float(dev_rate)
+        base_dev = overheads_m * base_dev_rate
+        reduction_amount = overheads_m * reduction_rate
+        revised_dev = overheads_m * float(dev_rate)
 
-    subtotal = prisoner_monthly + instructor_monthly + overheads_monthly + dev_to_add
-    vat_amount = subtotal * (20.0 / 100.0)
-    grand_total = subtotal + vat_amount
+        dev_rows.append(("Development charge (20%)", base_dev))
+        if reduction_amount > 0:
+            dev_rows.append(("Development charge reductions", -reduction_amount))  # red via render_summary_table
+        dev_rows.append(("Revised development charge", revised_dev))
+        rows.extend(dev_rows)
 
-    rows += [
-        ("Subtotal", subtotal),
-        ("VAT (20%)", vat_amount),
-        ("Grand Total (£/month)", grand_total),
-    ]
-
-    # Also return a DataFrame for CSV export
-    df = pd.DataFrame(rows, columns=["Item", "Amount (£)"])
-    ctx = {
-        "rows": rows,
-        "subtotal": subtotal,
-        "vat_amount": vat_amount,
-        "grand_total": grand_total,
-    }
-    return df, ctx
+    # Subtotal, VAT (20%), Grand Total (monthly)
+    subtotal = sum(v for _, v in rows
