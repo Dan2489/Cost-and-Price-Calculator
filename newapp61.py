@@ -11,7 +11,7 @@ import production61
 
 
 def _df_to_html_table(df: pd.DataFrame) -> str:
-    # Simple HTML table for in-app rendering (matches export look)
+    """Render DataFrame as styled HTML table."""
     cols = list(df.columns)
     thead = "<tr>" + "".join([f"<th>{c}</th>" for c in cols]) + "</tr>"
     body_rows = []
@@ -20,7 +20,6 @@ def _df_to_html_table(df: pd.DataFrame) -> str:
         for col in cols:
             val = row[col]
             if isinstance(val, (int, float)) and pd.notna(val):
-                # currency-like columns
                 if any(x in str(col).lower() for x in ["£", "amount", "price", "cost", "total"]):
                     tds.append(f"<td>{fmt_currency(val)}</td>")
                 else:
@@ -32,7 +31,7 @@ def _df_to_html_table(df: pd.DataFrame) -> str:
 
 
 def _dev_rate_from_support(s: str) -> float:
-    # Per your rule: starts 20%; -10% for each support; "Both" -> 0%
+    """Development charge logic: starts 20%; -10% for each support; 'Both' -> 0%"""
     if s == "None":
         return 0.20
     if s in ("Employment on release/RoTL", "Post release"):
@@ -45,7 +44,7 @@ def _dev_rate_from_support(s: str) -> float:
 def main():
     inject_govuk_css()
 
-    # Header with your GitHub-hosted logo
+    # ---- Header with Logo ----
     st.markdown(
         """
         <div style="display:flex; align-items:center; gap:20px; margin-bottom:1rem;">
@@ -56,10 +55,10 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Sidebar controls (uses your CFG constant correctly)
+    # ---- Sidebar Controls ----
     lock_overheads, instructor_pct, prisoner_output = sidebar_controls(CFG.GLOBAL_OUTPUT_DEFAULT)
 
-    # Main form (unchanged fields/order you asked to keep)
+    # ---- Form ----
     with st.form("cost_form"):
         prison_name = st.selectbox("Prison Name", list(PRISON_TO_REGION.keys()))
         customer_name = st.text_input("Customer Name")
@@ -75,7 +74,6 @@ def main():
         region = PRISON_TO_REGION.get(prison_name, "National")
         roles = SUPERVISOR_PAY.get(region, [])
 
-        # Dynamically show title selects as soon as count > 0
         for i in range(int(num_instructors)):
             title_choice = st.selectbox(
                 f"Instructor {i+1} Title",
@@ -96,16 +94,13 @@ def main():
 
         submitted = st.form_submit_button("Generate Costs", use_container_width=True)
 
-    # Run
+    # ---- Logic ----
     if submitted:
-        # Common export meta
         meta = {"customer": customer_name, "prison": prison_name, "region": region}
 
         if contract_type == "Host":
-            # Development charge per your rules (20% -> minus 10/10 -> 0 if Both)
             dev_rate = _dev_rate_from_support(emp_support)
 
-            # Call your host module (signature kept consistent with earlier working version)
             host_df, _ctx = host61.generate_host_quote(
                 workshop_hours=workshop_hours,
                 num_prisoners=num_prisoners,
@@ -113,21 +108,20 @@ def main():
                 num_supervisors=num_instructors,
                 supervisor_salaries=supervisor_salaries,
                 effective_pct=float(instructor_pct),
-                customer_covers_supervisors=False,  # toggle appears elsewhere when you enable it
+                customer_covers_supervisors=False,
+                region=region,
                 customer_type="Commercial",
                 apply_vat=True,
                 vat_rate=20.0,
                 dev_rate=dev_rate,
                 contracts_overseen=int(num_contracts),
                 lock_overheads=bool(lock_overheads),
-                region=region,
                 emp_support=emp_support,
             )
 
             st.subheader("Host Quote")
             st.markdown(_df_to_html_table(host_df), unsafe_allow_html=True)
 
-            # Export HTML (PDF-ready)
             html_bytes = export_doc("Host Quote", meta, host_df.to_html(index=False))
             st.download_button(
                 "Download PDF-ready HTML (Host)",
@@ -136,9 +130,8 @@ def main():
                 mime="text/html",
             )
 
-        else:
-            # Production – pass through unchanged; module handles unit/monthly etc.
-            prod_df, _ctx = production61.calculate_production_costs(
+        else:  # Production
+            prod_df = production61.calculate_production_costs(
                 workshop_hours=workshop_hours,
                 num_prisoners=num_prisoners,
                 prisoner_salary=prisoner_salary,
@@ -165,7 +158,7 @@ def main():
                 mime="text/html",
             )
 
-    # Reset
+    # ---- Reset ----
     if st.button("Reset Selections"):
         for k in list(st.session_state.keys()):
             del st.session_state[k]
