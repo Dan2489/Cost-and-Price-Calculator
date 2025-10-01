@@ -59,6 +59,16 @@ def fmt_currency(val) -> str:
     except Exception:
         return str(val)
 
+# ---------- SIDEBAR CONTROLS ----------
+def sidebar_controls(default_output: int = 100):
+    """Sidebar sliders for allocation, labour output, and lock overheads."""
+    with st.sidebar:
+        st.header("Controls")
+        lock_overheads = st.checkbox("Lock overheads to highest instructor salary?", value=False)
+        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, 100)
+        prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output)
+    return lock_overheads, instructor_pct, prisoner_output
+
 # ---------- ADJUSTMENT ----------
 def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
     """Scale numeric/currency values by factor and return formatted copy with all columns."""
