@@ -12,7 +12,7 @@ def inject_govuk_css():
         [data-testid="stSidebar"] { min-width: 0 !important; max-width: 0 !important; }
       }
 
-      /* Buttons & sliders: GOV.UK-ish */
+      /* Buttons & sliders */
       :root { --govuk-green: #00703c; --govuk-yellow: #ffdd00; }
       .stButton > button {
         background: var(--govuk-green) !important; color: #fff !important;
@@ -22,18 +22,11 @@ def inject_govuk_css():
       .stButton > button:focus, .stButton > button:focus-visible {
         outline: 3px solid var(--govuk-yellow) !important; outline-offset: 0 !important; box-shadow: 0 0 0 1px #000 inset !important;
       }
-      [data-testid="stSlider"] [role="slider"] {
-        background: var(--govuk-green) !important; border: 2px solid var(--govuk-green) !important; box-shadow: none !important;
-      }
-      [data-testid="stSlider"] [role="slider"]:focus,
-      [data-testid="stSlider"] [role="slider"]:focus-visible {
-        outline: 3px solid var(--govuk-yellow) !important; outline-offset: 0 !important; box-shadow: 0 0 0 1px #000 inset !important;
-      }
 
-      /* Centered results tables */
-      .results-table { max-width: 900px; margin: 1rem auto; }
-      .results-table table { width: auto; border-collapse: collapse; margin: 12px auto; }
-      .results-table th, .results-table td { border-bottom: 1px solid #b1b4b6; padding: 8px 12px; text-align: left; }
+      /* In-app results tables */
+      .results-table { margin: 1rem 0; }
+      .results-table table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+      .results-table th, .results-table td { border-bottom: 1px solid #b1b4b6; padding: 6px 10px; text-align: left; }
       .results-table th { background: #f3f2f1; }
       .results-table td.neg { color: #d4351c; }
       .results-table tr.total td { font-weight: 700; }
@@ -51,11 +44,10 @@ def sidebar_controls(default_output: int, show_output_slider: bool = True, rec_p
         st.header("Controls")
         lock_overheads = st.checkbox("Lock overheads to highest instructor salary", value=False)
 
-        # Instructor allocation (%). Use recommendation if passed, capped 100.
         default_alloc = min(100, int(rec_pct)) if isinstance(rec_pct, (int, float)) else 100
         instructor_pct = st.slider("Instructor allocation (%)", 0, 100, default_alloc)
         if rec_pct is not None:
-            st.caption(f"Recommended allocation = {rec_pct}% (based on hours/contracts, capped at 100%)")
+            st.caption(f"Instructor allocation is set to {rec_pct}% (adjust in sidebar if required).")
 
         prisoner_output = 100
         if show_output_slider:
@@ -75,8 +67,8 @@ def export_doc(title: str, meta: dict, body_html: str) -> BytesIO:
     css = """
       <style>
         body{font-family:Arial,Helvetica,sans-serif;color:#0b0c0c;margin:20px;}
-        table{width:auto;max-width:900px;margin:12px auto;border-collapse:collapse;}
-        th,td{border-bottom:1px solid #b1b4b6;padding:8px;text-align:left;}
+        table{width:100%;border-collapse:collapse;margin:12px 0;}
+        th,td{border:1px solid #b1b4b6;padding:6px 10px;text-align:left;}
         th{background:#f3f2f1;} td.neg{color:#d4351c;} tr.total td{font-weight:700;}
         h1,h2,h3{margin:0.2rem 0;}
       </style>
@@ -88,5 +80,13 @@ def export_doc(title: str, meta: dict, body_html: str) -> BytesIO:
         f"Prison: {meta.get('prison','')}<br/>"
         f"Region: {meta.get('region','')}</p>"
     )
-    html_doc = f"<!doctype html><html><head><meta charset='utf-8'/><title>{title}</title>{css}</head><body>{header_html}{meta_html}{body_html}</body></html>"
+
+    # Closing note (from your supplied HTML)
+    closing_note = """
+    <p>We are pleased to provide this quotation for the requested services. 
+    Prices are indicative and may change based on the final scope and site conditions. 
+    Please treat this document as confidential and for the intended recipient only.</p>
+    """
+
+    html_doc = f"<!doctype html><html><head><meta charset='utf-8'/><title>{title}</title>{css}</head><body>{header_html}{meta_html}{body_html}{closing_note}</body></html>"
     b = BytesIO(html_doc.encode("utf-8")); b.seek(0); return b
