@@ -132,7 +132,7 @@ if contract_type == "Host":
         if prod_host < 100:
             df_adj = adjust_table(df, prod_host / 100.0)
             st.markdown("### Adjusted Costs (for review only)")
-            st.markdown(render_table_html(df_adj), unsafe_allow_html=True)
+            st.markdown(render_table_html(df_adj, highlight=True), unsafe_allow_html=True)
             st.caption("_Productivity assumptions applied — reviewed annually with Commercial._")
 
             extra_note = (
@@ -321,7 +321,7 @@ if contract_type == "Production":
         if prod_prod < 100:
             df_adj = adjust_table(df, prod_prod / 100.0)
             st.markdown("### Adjusted Costs (for review only)")
-            st.markdown(render_table_html(df_adj), unsafe_allow_html=True)
+            st.markdown(render_table_html(df_adj, highlight=True), unsafe_allow_html=True)
             st.caption("_Productivity assumptions applied — reviewed annually with Commercial._")
 
             extra_note = (
