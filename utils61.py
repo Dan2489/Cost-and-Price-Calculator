@@ -47,7 +47,7 @@ def inject_govuk_css():
           }
           table.custom td.neg { color: #d4351c; }
           table.custom tr.grand td { font-weight: bold; }
-          table.custom.highlight { background-color: #fff8dc; }
+          table.custom.highlight { background-color: #fff8dc; } /* light yellow */
         </style>
         """,
         unsafe_allow_html=True
@@ -70,7 +70,7 @@ def sidebar_controls(default_output: int):
 # -------------------------------
 def fmt_currency(val) -> str:
     try:
-        return f"£{val:,.2f}"
+        return f"£{float(val):,.2f}"
     except Exception:
         return str(val)
 
@@ -133,7 +133,7 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
 
     df_fmt = df.copy()
     for col in df_fmt.columns:
-        if any(key in col for key in ["£", "Cost", "Total", "Price"]):
+        if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand"]):
             df_fmt[col] = pd.to_numeric(df_fmt[col], errors="coerce").map(
                 lambda x: fmt_currency(x) if pd.notnull(x) else ""
             )
@@ -145,14 +145,23 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
 # Adjust table for productivity
 # -------------------------------
 def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
-    """Return a copy of df with numeric/currency values scaled by factor."""
+    """
+    Scale numeric/currency values by factor and return formatted copy.
+    Works for Host and Production tables.
+    """
+    if df is None or df.empty:
+        return df
+
     df_adj = df.copy()
+
     for col in df_adj.columns:
-        def try_scale(val):
-            try:
-                v = float(str(val).replace("£", "").replace(",", ""))
-                return fmt_currency(v * factor)
-            except Exception:
-                return val
-        df_adj[col] = df_adj[col].map(try_scale)
+        if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand"]):
+            def try_scale(val):
+                try:
+                    v = float(str(val).replace("£", "").replace(",", ""))
+                    return fmt_currency(v * factor)
+                except Exception:
+                    return val
+            df_adj[col] = df_adj[col].map(try_scale)
+
     return df_adj
