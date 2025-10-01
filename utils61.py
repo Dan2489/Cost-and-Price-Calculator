@@ -3,7 +3,6 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-# Inject CSS for GOV.UK style
 def inject_govuk_css() -> None:
     st.markdown(
         """
@@ -19,21 +18,18 @@ def inject_govuk_css() -> None:
         unsafe_allow_html=True
     )
 
-# Format currency
 def fmt_currency(v) -> str:
     try:
         return f"£{float(v):,.2f}"
     except Exception:
         return ""
 
-# Export DataFrame as CSV bytes
 def export_csv_bytes(df: pd.DataFrame) -> BytesIO:
     b = BytesIO()
     df.to_csv(b, index=False)
     b.seek(0)
     return b
 
-# Export as HTML for PDF-ready download
 def export_html(host_df=None, prod_df=None, title="Quote", extra_note=None) -> BytesIO:
     css = """
       <style>
