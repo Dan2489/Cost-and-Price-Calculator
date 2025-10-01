@@ -1,6 +1,6 @@
 # host61.py
 import pandas as pd
-from typing import Dict, List, Tuple
+from typing import List, Tuple, Dict
 from tariff61 import BAND3_COSTS
 
 def generate_host_quote(
@@ -13,7 +13,7 @@ def generate_host_quote(
     effective_pct: float,         # instructor allocation %
     region: str,
     customer_type: str,
-    dev_rate: float,              # already reduced per support; 0 if Another Government Department
+    dev_rate: float,              # 0..0.2 after reductions; 0 if Another Government Department
     contracts_overseen: int,
     lock_overheads: bool,
 ) -> Tuple[pd.DataFrame, Dict]:
@@ -30,8 +30,8 @@ def generate_host_quote(
     else:
         share = (float(effective_pct) / 100.0) / max(1, int(contracts_overseen))
         instructor_m_total = sum(((s / 12.0) * share) for s in supervisor_salaries)
-    if instructor_m_total > 0:
-        rows.append(("Instructors", instructor_m_total))
+        if instructor_m_total > 0:
+            rows.append(("Instructors", instructor_m_total))
 
     # Overheads (61%) – base either shadow Band 3 (if customer provides) or instructor cost
     if customer_covers_supervisors:
@@ -46,7 +46,7 @@ def generate_host_quote(
     overheads_m = overhead_base_m * 0.61
     rows.append(("Overheads (61%)", overheads_m))
 
-    # Development charge (Commercial only)
+    # Development charge (Commercial only) – show base, reduction, revised
     if customer_type == "Commercial":
         base_dev_rate = 0.20
         reduction_rate = base_dev_rate - float(dev_rate)
