@@ -1,5 +1,6 @@
 from typing import List, Dict, Tuple
 import pandas as pd
+from tariff61 import BAND3_COSTS
 
 def generate_host_quote(
     *,
@@ -7,63 +8,73 @@ def generate_host_quote(
     num_prisoners: int,
     prisoner_salary: float,
     num_supervisors: int,
+    customer_covers_supervisors: bool,   # ✅ added
     supervisor_salaries: List[float],
     region: str,
-    contracts: int = 1,
-    employment_support: str = "None",
-    instructor_allocation: float = 100.0,
-    lock_overheads: bool = False,
+    contracts: int,
+    employment_support: str,
+    instructor_allocation: float,
+    lock_overheads: bool,
 ) -> Tuple[pd.DataFrame, Dict]:
-    """
-    Host monthly quote:
-    - Prisoner wages
-    - Instructor costs apportioned by contracts and allocation%
-    - Overheads at 61% of instructor cost (or locked to the highest instructor salary)
-    - Development charge: 20%, less 10% per support (RoTL/Post) or 20% if both.
-    - VAT 20%
-    """
     breakdown: Dict[str, float] = {}
 
-    # Prisoner wages per month
+    # Prisoner wages
     breakdown["Prisoner wages"] = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
 
-    # Instructors per month (apportioned by contracts and allocation%)
+    # Instructor costs
     instructor_cost = 0.0
-    if num_supervisors > 0 and supervisor_salaries:
-        instructor_cost = sum(
-            (s / 12.0) * (float(instructor_allocation) / 100.0) * (1.0 / float(contracts))
-            for s in supervisor_salaries
-        )
-    breakdown["Instructors"] = instructor_cost
+    if not customer_covers_supervisors:
+        # Standard salary logic
+        instructor_cost = sum((s / 12.0) * (float(instructor_allocation) / 100.0) for s in supervisor_salaries)
+        breakdown["Instructors"] = instructor_cost
+    else:
+        # Customer provides instructor → no wage shown, overheads use shadow Band 3
+        breakdown["Instructors"] = 0.0
 
-    # Overheads 61%
-    if lock_overheads and supervisor_salaries:
-        overhead_base = (max(supervisor_salaries) / 12.0) * (float(instructor_allocation) / 100.0) * (1.0 / float(contracts))
+    # Overheads (61% of chosen base)
+    if customer_covers_supervisors:
+        shadow = BAND3_COSTS.get(region, BAND3_COSTS["National"])
+        overhead_base = (shadow / 12.0) * (float(instructor_allocation) / 100.0)
     else:
         overhead_base = instructor_cost
-    breakdown["Overheads (61%)"] = overhead_base * 0.61
 
-    # Development charge (Commercial-type logic simplified to employment_support flag)
+    if lock_overheads and supervisor_salaries:
+        overhead_base = (max(supervisor_salaries) / 12.0) * (float(instructor_allocation) / 100.0)
+
+    overheads_m = overhead_base * 0.61
+    breakdown["Overheads (61%)"] = overheads_m
+
+    # Development charge logic
     dev_rate = 0.20
-    if employment_support in ("Employment on release/RoTL", "Post release"):
-        dev_rate = 0.10
+    if employment_support == "Employment on release/RoTL":
+        dev_rate -= 0.10
+    elif employment_support == "Post release":
+        dev_rate -= 0.10
     elif employment_support == "Both":
-        dev_rate = 0.00
+        dev_rate -= 0.20
+    dev_rate = max(dev_rate, 0.0)
 
-    breakdown["Development charge (before reductions)"] = overhead_base * 0.20
-    if dev_rate < 0.20:
-        reduction = overhead_base * (0.20 - dev_rate)
-        breakdown["Development charge reductions"] = -reduction
-    breakdown["Revised development charge"] = overhead_base * dev_rate
+    dev_charge = overheads_m * dev_rate
+    if dev_charge > 0:
+        breakdown["Development charge (applied)"] = dev_charge
+    if employment_support != "None":
+        breakdown["Development charge reduction"] = -abs(overheads_m * (0.20 - dev_rate))
+        breakdown["Revised development charge"] = dev_charge
 
-    # Totals + VAT
     subtotal = sum(breakdown.values())
-    breakdown["Subtotal"] = subtotal
     vat_amount = subtotal * 0.20
-    breakdown["VAT (20%)"] = vat_amount
     grand_total = subtotal + vat_amount
-    breakdown["Grand Total (£/month)"] = grand_total
 
-    host_df = pd.DataFrame([(k, v) for k, v in breakdown.items()], columns=["Item", "Amount (£)"])
-    ctx = {"subtotal": subtotal, "vat_amount": vat_amount, "grand_total": grand_total}
+    rows = list(breakdown.items()) + [
+        ("Subtotal", subtotal),
+        ("VAT (20%)", vat_amount),
+        ("Grand Total (£/month)", grand_total),
+    ]
+    host_df = pd.DataFrame(rows, columns=["Item", "Amount (£)"])
+
+    ctx = {
+        "subtotal": subtotal,
+        "vat_amount": vat_amount,
+        "grand_total": grand_total,
+    }
     return host_df, ctx
