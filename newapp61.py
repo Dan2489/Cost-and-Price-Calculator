@@ -1,15 +1,10 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
-from io import BytesIO
-
 from config61 import CFG
 import host61
 import production61
 from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
-from utils61 import inject_govuk_css, fmt_currency, export_csv_bytes, export_html
-from utils61 import sidebar_controls  # sidebar with lock overheads, allocation, prisoner output
-
+from utils61 import inject_govuk_css, fmt_currency, export_csv_bytes, export_html, sidebar_controls
 
 # -------------------------------------------------------------------
 # Page config + CSS
@@ -20,7 +15,7 @@ inject_govuk_css()
 st.title("Cost and Price Calculator")
 
 # -------------------------------------------------------------------
-# Sidebar controls (unchanged from baseline)
+# Sidebar controls
 # -------------------------------------------------------------------
 lock_overheads, instructor_pct, prisoner_output = sidebar_controls(CFG.GLOBAL_OUTPUT_DEFAULT)
 
@@ -30,6 +25,7 @@ lock_overheads, instructor_pct, prisoner_output = sidebar_controls(CFG.GLOBAL_OU
 prisons_sorted = ["Select"] + sorted(PRISON_TO_REGION.keys())
 prison_choice = st.selectbox("Prison Name", prisons_sorted, index=0, key="prison_choice")
 region = PRISON_TO_REGION.get(prison_choice, "Select") if prison_choice != "Select" else "Select"
+st.session_state["region"] = region
 
 customer_name = st.text_input("Customer Name", key="customer_name")
 contract_type = st.selectbox("Contract Type", ["Select", "Host", "Production"], key="contract_type")
@@ -78,9 +74,8 @@ def validate_inputs():
         errors.append("Choose a title for each instructor")
     return errors
 
-
 # -------------------------------------------------------------------
-# Helpers: extract base total
+# Helpers
 # -------------------------------------------------------------------
 def _get_base_total(df: pd.DataFrame) -> float:
     try:
@@ -96,7 +91,6 @@ def _get_base_total(df: pd.DataFrame) -> float:
     except Exception:
         pass
     return 0.0
-
 
 # -------------------------------------------------------------------
 # HOST MODE
@@ -119,39 +113,42 @@ if contract_type == "Host":
                 instructor_allocation=instructor_pct,
                 lock_overheads=lock_overheads,
             )
+            st.session_state["host_df"] = df
+            st.session_state["host_ctx"] = ctx
 
-            st.markdown(df.to_html(index=False), unsafe_allow_html=True)
+    if "host_df" in st.session_state:
+        df = st.session_state["host_df"]
+        ctx = st.session_state["host_ctx"]
+        st.markdown(df.to_html(index=False), unsafe_allow_html=True)
 
-            # Productivity slider
-            st.markdown("---")
-            prod_host = st.slider(
-                "Adjust for Productivity (%)",
-                min_value=50, max_value=100, value=100, step=5,
-                key="prod_adj_host",
-                help="Scale the displayed total by expected productivity (e.g. 90% = reduce by 10%)."
+        # Productivity slider
+        st.markdown("---")
+        prod_host = st.slider(
+            "Adjust for Productivity (%)",
+            min_value=50, max_value=100, value=100, step=5,
+            key="prod_adj_host",
+            help="Scale the displayed total by expected productivity (e.g. 90% = reduce by 10%)."
+        )
+        base_total = _get_base_total(df)
+        adjusted_total = base_total * (prod_host / 100.0)
+        st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
+
+        extra_note = None
+        if prod_host < 100:
+            extra_note = (
+                f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
+                "<p><em>Productivity assumptions have been applied. "
+                "These will be reviewed annually with Commercial.</em></p>"
             )
-            base_total = _get_base_total(df)
-            adjusted_total = base_total * (prod_host / 100.0)
-            st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
 
-            extra_note = None
-            if prod_host < 100:
-                extra_note = (
-                    f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
-                    "<p><em>Productivity assumptions have been applied. "
-                    "These will be reviewed annually with Commercial.</em></p>"
-                )
-
-            # Downloads
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button("Download CSV (Host)", data=export_csv_bytes(df),
-                                   file_name="host_quote.csv", mime="text/csv")
-            with c2:
-                st.download_button("Download PDF-ready HTML (Host)",
-                                   data=export_html(df, None, title="Host Quote", extra_note=extra_note),
-                                   file_name="host_quote.html", mime="text/html")
-
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button("Download CSV (Host)", data=export_csv_bytes(df),
+                               file_name="host_quote.csv", mime="text/csv")
+        with c2:
+            st.download_button("Download PDF-ready HTML (Host)",
+                               data=export_html(df, None, title="Host Quote", extra_note=extra_note),
+                               file_name="host_quote.html", mime="text/html")
 
 # -------------------------------------------------------------------
 # PRODUCTION MODE
@@ -175,35 +172,39 @@ if contract_type == "Production":
                 lock_overheads=lock_overheads,
                 prisoner_output=prisoner_output,
             )
+            st.session_state["prod_df"] = df
+            st.session_state["prod_ctx"] = ctx
 
-            st.markdown(df.to_html(index=False), unsafe_allow_html=True)
+    if "prod_df" in st.session_state:
+        df = st.session_state["prod_df"]
+        ctx = st.session_state["prod_ctx"]
+        st.markdown(df.to_html(index=False), unsafe_allow_html=True)
 
-            # Productivity slider
-            st.markdown("---")
-            prod_prod = st.slider(
-                "Adjust for Productivity (%)",
-                min_value=50, max_value=100, value=100, step=5,
-                key="prod_adj_prod",
-                help="Scale the displayed total by expected productivity (e.g. 90% = reduce by 10%)."
+        # Productivity slider
+        st.markdown("---")
+        prod_prod = st.slider(
+            "Adjust for Productivity (%)",
+            min_value=50, max_value=100, value=100, step=5,
+            key="prod_adj_prod",
+            help="Scale the displayed total by expected productivity (e.g. 90% = reduce by 10%)."
+        )
+        base_total = _get_base_total(df)
+        adjusted_total = base_total * (prod_prod / 100.0)
+        st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
+
+        extra_note = None
+        if prod_prod < 100:
+            extra_note = (
+                f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
+                "<p><em>Productivity assumptions have been applied. "
+                "These will be reviewed annually with Commercial.</em></p>"
             )
-            base_total = _get_base_total(df)
-            adjusted_total = base_total * (prod_prod / 100.0)
-            st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
 
-            extra_note = None
-            if prod_prod < 100:
-                extra_note = (
-                    f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
-                    "<p><em>Productivity assumptions have been applied. "
-                    "These will be reviewed annually with Commercial.</em></p>"
-                )
-
-            # Downloads
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button("Download CSV (Production)", data=export_csv_bytes(df),
-                                   file_name="production_quote.csv", mime="text/csv")
-            with c2:
-                st.download_button("Download PDF-ready HTML (Production)",
-                                   data=export_html(None, df, title="Production Quote", extra_note=extra_note),
-                                   file_name="production_quote.html", mime="text/html")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button("Download CSV (Production)", data=export_csv_bytes(df),
+                               file_name="production_quote.csv", mime="text/csv")
+        with c2:
+            st.download_button("Download PDF-ready HTML (Production)",
+                               data=export_html(None, df, title="Production Quote", extra_note=extra_note),
+                               file_name="production_quote.html", mime="text/html")
