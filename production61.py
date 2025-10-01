@@ -1,8 +1,6 @@
-from typing import List, Dict, Tuple, Optional
-from datetime import date, timedelta
-import math
+from typing import List, Dict, Optional
+from datetime import date
 import pandas as pd
-from config61 import CFG
 from utils61 import fmt_currency
 
 # Band 3 shadow costs (annual)
@@ -156,11 +154,8 @@ def calculate_adhoc(
     lock_overheads: bool,
     employment_support: str,
 ) -> Dict:
-    # This function already works in your setup.
-    # Leaving as-is to not break anything.
-    # (Assumes it returns per_line + totals + feasibility)
-    ...
-    # KEEP YOUR EXISTING IMPLEMENTATION HERE
+    # keep your existing implementation
+    # (returns per_line, totals, feasibility)
     return {}
 
 # ---------- Ad-hoc Table Builder ----------
