@@ -9,12 +9,6 @@ def inject_govuk_css():
     st.markdown(
         """
         <style>
-          /* Sidebar */
-          [data-testid="stSidebar"] {
-            min-width: 320px !important;
-            max-width: 320px !important;
-          }
-
           /* GOV.UK colours */
           :root {
             --govuk-green: #00703c;
@@ -53,7 +47,7 @@ def inject_govuk_css():
           }
           table.custom td.neg { color: #d4351c; }
           table.custom tr.grand td { font-weight: bold; }
-          table.custom.highlight { background-color: #fff8dc; } /* light yellow for adjusted */
+          table.custom.highlight { background-color: #fff8dc; }
         </style>
         """,
         unsafe_allow_html=True
@@ -116,14 +110,12 @@ def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
     html += f"<h1>{title}</h1>"
 
     if df_host is not None:
-        html += df_host.to_html(index=False, classes="custom", border=0, justify="left")
-
+        html += render_table_html(df_host)
     if df_prod is not None:
-        html += df_prod.to_html(index=False, classes="custom", border=0, justify="left")
-
+        html += render_table_html(df_prod)
     if adjusted_df is not None:
         html += "<h3>Adjusted Costs (for review only)</h3>"
-        html += adjusted_df.to_html(index=False, classes="custom highlight", border=0, justify="left")
+        html += render_table_html(adjusted_df, highlight=True)
 
     if extra_note:
         html += f"<div style='margin-top:1em'>{extra_note}</div>"
@@ -135,29 +127,32 @@ def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
 # Table rendering
 # -------------------------------
 def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
-    """Render DataFrame as styled HTML table with GOV.UK styles."""
+    """Render DataFrame as styled HTML table with GOV.UK styles and currency formatting."""
     if df is None or df.empty:
         return "<p><em>No data</em></p>"
 
+    df_fmt = df.copy()
+    for col in df_fmt.columns:
+        if any(key in col for key in ["£", "Cost", "Total", "Price"]):
+            df_fmt[col] = pd.to_numeric(df_fmt[col], errors="coerce").map(
+                lambda x: fmt_currency(x) if pd.notnull(x) else ""
+            )
+
     cls = "custom highlight" if highlight else "custom"
-    return df.to_html(index=False, classes=cls, border=0, justify="left")
+    return df_fmt.to_html(index=False, classes=cls, border=0, justify="left", escape=False)
 
 # -------------------------------
 # Adjust table for productivity
 # -------------------------------
 def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
-    """Return a copy of df with numeric values scaled by factor."""
+    """Return a copy of df with numeric/currency values scaled by factor."""
     df_adj = df.copy()
     for col in df_adj.columns:
-        if pd.api.types.is_numeric_dtype(df_adj[col]):
-            df_adj[col] = df_adj[col].apply(lambda x: x * factor if pd.notnull(x) else x)
-        else:
-            # Try to strip currency signs
-            def try_parse(val):
-                try:
-                    val_f = float(str(val).replace("£", "").replace(",", ""))
-                    return f"£{val_f * factor:,.2f}"
-                except Exception:
-                    return val
-            df_adj[col] = df_adj[col].apply(try_parse)
+        def try_scale(val):
+            try:
+                v = float(str(val).replace("£", "").replace(",", ""))
+                return fmt_currency(v * factor)
+            except Exception:
+                return val
+        df_adj[col] = df_adj[col].map(try_scale)
     return df_adj
