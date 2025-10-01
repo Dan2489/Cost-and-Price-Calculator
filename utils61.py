@@ -15,7 +15,6 @@ def inject_govuk_css():
         background: var(--govuk-green) !important; color: #fff !important;
         border: 2px solid transparent !important; border-radius: 0 !important; font-weight: 600;
       }
-      .stButton > button:hover { filter: brightness(0.95); }
       .results-table table { border-collapse: collapse; margin: 12px 0; width: 100%; }
       .results-table th, .results-table td { border:1px solid #b1b4b6; padding:6px 10px; text-align:left; }
       .results-table th { background:#f3f2f1; }
@@ -25,7 +24,7 @@ def inject_govuk_css():
 
 def fmt_currency(v):
     try: return f"£{float(v):,.2f}"
-    except Exception: return ""
+    except Exception: return v
 
 def sidebar_controls(default_output: int, show_output_slider: bool = True, rec_pct: int | None = None):
     with st.sidebar:
@@ -43,12 +42,12 @@ def sidebar_controls(default_output: int, show_output_slider: bool = True, rec_p
 def render_summary_table(rows, dev_reduction: bool = False) -> str:
     body = []
     for item, val in rows:
-        val_str = fmt_currency(val) if val is not None else ""
+        val_str = fmt_currency(val) if isinstance(val, (int, float)) else (val or "")
         row_cls = " class='total'" if "Total" in str(item) or "Subtotal" in str(item) else ""
         body.append(f"<tr{row_cls}><td>{item}</td><td>{val_str}</td></tr>")
     return f"<div class='results-table'><table><tr><th>Item</th><th>Amount (£)</th></tr>{''.join(body)}</table></div>"
 
-def export_doc(title: str, meta: dict, body_html: str) -> BytesIO:
+def export_doc(title: str, meta: dict, body_html: str, drop_cols: list[str] = None) -> BytesIO:
     css = """
       <style>
         body{font-family:Arial,Helvetica,sans-serif;color:#0b0c0c;margin:20px;}
