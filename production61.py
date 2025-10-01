@@ -1,7 +1,6 @@
 from typing import List, Dict, Tuple, Optional
 from datetime import date, timedelta
 import math
-import pandas as pd
 from tariff61 import BAND3_COSTS
 
 # ---------- Helpers ----------
@@ -51,9 +50,8 @@ def calculate_production_contractual(
 
     overheads_weekly = overhead_base * 0.61
 
-    # Development charge logic (always 20%)
+    # Development charge logic
     full_dev_charge = overheads_weekly * 0.20
-
     reduction_val = 0.0
     if employment_support == "Employment on release/RoTL":
         reduction_val = -abs(overheads_weekly * 0.10)
@@ -62,11 +60,13 @@ def calculate_production_contractual(
     elif employment_support == "Both":
         reduction_val = -abs(overheads_weekly * 0.20)
 
-    revised_dev_charge = full_dev_charge + reduction_val
+    dev_used = full_dev_charge
+    if reduction_val != 0.0:
+        dev_used = full_dev_charge + reduction_val
 
     # Totals (weekly)
     base_weekly_total = prisoner_weekly + inst_weekly_total + overheads_weekly
-    total_weekly = base_weekly_total + revised_dev_charge
+    total_weekly = base_weekly_total + dev_used
 
     denom = sum(int(it.get("assigned", 0)) * workshop_hours * 60.0 for it in items)
     output_scale = float(output_pct) / 100.0
@@ -89,8 +89,7 @@ def calculate_production_contractual(
         prisoner_weekly_item = pris_assigned * prisoner_salary
         inst_weekly_item      = inst_weekly_total * share
         overheads_weekly_item = overheads_weekly * share
-        dev_weekly_item       = revised_dev_charge * share
-        weekly_cost_item      = prisoner_weekly_item + inst_weekly_item + overheads_weekly_item + dev_weekly_item
+        dev_weekly_item       = dev_used * share
 
         if pricing_mode == "target":
             tgt = 0
@@ -111,18 +110,14 @@ def calculate_production_contractual(
                 f"available {available_minutes_item:,.0f} mins; exceeds capacity."
             )
 
-        # Costs
-        unit_cost_ex_vat = (weekly_cost_item / units_for_pricing) if units_for_pricing > 0 else None
+        unit_cost_ex_vat = (dev_weekly_item + prisoner_weekly_item + inst_weekly_item + overheads_weekly_item) / units_for_pricing if units_for_pricing > 0 else None
         unit_price_ex_vat = unit_cost_ex_vat
-        if unit_price_ex_vat is not None and (customer_type == "Commercial" and apply_vat):
-            unit_price_inc_vat = unit_price_ex_vat * (1 + (vat_rate / 100.0))
-        else:
-            unit_price_inc_vat = unit_price_ex_vat
+        unit_price_inc_vat = unit_price_ex_vat * (1 + (vat_rate / 100.0)) if unit_price_ex_vat and customer_type == "Commercial" else unit_price_ex_vat
 
         monthly_total_ex_vat = (units_for_pricing * unit_cost_ex_vat * 52 / 12) if unit_cost_ex_vat else None
         monthly_total_inc_vat = (units_for_pricing * unit_price_inc_vat * 52 / 12) if unit_price_inc_vat else None
 
-        results.append({
+        row = {
             "Item": name,
             "Output %": int(output_pct),
             "Capacity (units/week)": 0 if capacity_units <= 0 else int(round(capacity_units)),
@@ -138,9 +133,12 @@ def calculate_production_contractual(
             "Instructor Salary": inst_weekly_item,
             "Overheads (61%)": overheads_weekly_item,
             "Development Charge": full_dev_charge * share,
-            "Development Charge Reduction (Support Applied)": reduction_val * share if reduction_val != 0 else 0.0,
-            "Revised Development Charge": dev_weekly_item,
-        })
+        }
+        if reduction_val != 0.0:
+            row["Development Charge Reduction (Support Applied)"] = reduction_val * share
+            row["Revised Development Charge"] = dev_weekly_item
+
+        results.append(row)
     return results
 
 # ---------- Ad-hoc ----------
@@ -198,9 +196,8 @@ def calculate_adhoc(
 
     overheads_weekly = overhead_base * 0.61
 
-    # Development charge logic (always 20%)
+    # Development charge logic
     full_dev_charge = overheads_weekly * 0.20
-
     reduction_val = 0.0
     if employment_support == "Employment on release/RoTL":
         reduction_val = -abs(overheads_weekly * 0.10)
@@ -209,19 +206,18 @@ def calculate_adhoc(
     elif employment_support == "Both":
         reduction_val = -abs(overheads_weekly * 0.20)
 
-    revised_dev_charge = full_dev_charge + reduction_val
+    dev_used = full_dev_charge
+    if reduction_val != 0.0:
+        dev_used = full_dev_charge + reduction_val
 
-    weekly_cost_total = prisoner_weekly + inst_weekly_total + overheads_weekly + revised_dev_charge
+    weekly_cost_total = prisoner_weekly + inst_weekly_total + overheads_weekly + dev_used
     cost_per_minute = weekly_cost_total / minutes_per_week_capacity
 
     per_line, total_job_minutes, earliest_wd_available = [], 0.0, None
     for ln in lines:
         mins_per_unit = float(ln["mins_per_item"]) * int(ln["pris_per_item"])
         unit_cost_ex_vat = cost_per_minute * mins_per_unit
-        if customer_type == "Commercial" and apply_vat:
-            unit_cost_inc_vat = unit_cost_ex_vat * (1 + (vat_rate / 100.0))
-        else:
-            unit_cost_inc_vat = unit_cost_ex_vat
+        unit_cost_inc_vat = unit_cost_ex_vat * (1 + (vat_rate / 100.0)) if customer_type == "Commercial" and apply_vat else unit_cost_ex_vat
 
         total_line_minutes = int(ln["units"]) * mins_per_unit
         total_job_minutes += total_line_minutes
@@ -230,7 +226,7 @@ def calculate_adhoc(
             earliest_wd_available = wd_available
         wd_needed_line_alone = math.ceil(total_line_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
 
-        per_line.append({
+        row = {
             "Item": ln["name"],
             "Units": int(ln["units"]),
             "Unit Cost (ex VAT £)": unit_cost_ex_vat,
@@ -241,11 +237,14 @@ def calculate_adhoc(
             "Instructor Salary": inst_weekly_total,
             "Overheads (61%)": overheads_weekly,
             "Development Charge": full_dev_charge,
-            "Development Charge Reduction (Support Applied)": reduction_val if reduction_val != 0 else 0.0,
-            "Revised Development Charge": revised_dev_charge,
-            "wd_available": wd_available,
-            "wd_needed_line_alone": wd_needed_line_alone,
-        })
+        }
+        if reduction_val != 0.0:
+            row["Development Charge Reduction (Support Applied)"] = reduction_val
+            row["Revised Development Charge"] = dev_used
+
+        row["wd_available"] = wd_available
+        row["wd_needed_line_alone"] = wd_needed_line_alone
+        per_line.append(row)
 
     wd_needed_all = math.ceil(total_job_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
     earliest_wd_available = earliest_wd_available or 0
