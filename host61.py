@@ -8,7 +8,7 @@ def generate_host_quote(
     num_prisoners: int,
     prisoner_salary: float,
     num_supervisors: int,
-    customer_covers_supervisors: bool,   # ✅ added
+    customer_covers_supervisors: bool,
     supervisor_salaries: List[float],
     region: str,
     contracts: int,
@@ -24,14 +24,12 @@ def generate_host_quote(
     # Instructor costs
     instructor_cost = 0.0
     if not customer_covers_supervisors:
-        # Standard salary logic
         instructor_cost = sum((s / 12.0) * (float(instructor_allocation) / 100.0) for s in supervisor_salaries)
         breakdown["Instructors"] = instructor_cost
     else:
-        # Customer provides instructor → no wage shown, overheads use shadow Band 3
         breakdown["Instructors"] = 0.0
 
-    # Overheads (61% of chosen base)
+    # Overheads (61%)
     if customer_covers_supervisors:
         shadow = BAND3_COSTS.get(region, BAND3_COSTS["National"])
         overhead_base = (shadow / 12.0) * (float(instructor_allocation) / 100.0)
@@ -44,7 +42,7 @@ def generate_host_quote(
     overheads_m = overhead_base * 0.61
     breakdown["Overheads (61%)"] = overheads_m
 
-    # Development charge logic
+    # Development charge
     dev_rate = 0.20
     if employment_support == "Employment on release/RoTL":
         dev_rate -= 0.10
@@ -57,8 +55,11 @@ def generate_host_quote(
     dev_charge = overheads_m * dev_rate
     if dev_charge > 0:
         breakdown["Development charge (applied)"] = dev_charge
+
+    # Show reduction separately in red
     if employment_support != "None":
-        breakdown["Development charge reduction"] = -abs(overheads_m * (0.20 - dev_rate))
+        reduction_val = -abs(overheads_m * (0.20 - dev_rate))
+        breakdown["Development charge reduction (support applied)"] = reduction_val
         breakdown["Revised development charge"] = dev_charge
 
     subtotal = sum(breakdown.values())
