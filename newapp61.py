@@ -42,10 +42,12 @@ workshop_hours = st.number_input("How many hours is the workshop open per week?"
 num_prisoners = st.number_input("How many prisoners employed per week?", min_value=0, step=1)
 prisoner_salary = st.number_input("Average prisoner salary per week (£)", min_value=0.0, format="%.2f")
 
-num_supervisors = st.number_input("How many instructors?", min_value=0, step=1)
+# Instructor inputs
+num_supervisors = st.number_input("How many Instructors?", min_value=1, step=1)
+customer_covers_supervisors = st.checkbox("Customer provides Instructor(s)?", value=False)
 
 supervisor_salaries = []
-if num_supervisors > 0 and region != "Select":
+if num_supervisors > 0 and region != "Select" and not customer_covers_supervisors:
     titles_for_region = SUPERVISOR_PAY.get(region, [])
     for i in range(int(num_supervisors)):
         options = [t["title"] for t in titles_for_region]
@@ -72,7 +74,7 @@ def validate_inputs():
     if contract_type == "Select": errors.append("Select contract type")
     if workshop_hours <= 0: errors.append("Workshop hours must be greater than zero")
     if num_prisoners < 0: errors.append("Prisoners employed cannot be negative")
-    if num_supervisors > 0 and len(supervisor_salaries) != num_supervisors:
+    if not customer_covers_supervisors and num_supervisors > 0 and len(supervisor_salaries) != num_supervisors:
         errors.append("Choose a title for each instructor")
     return errors
 
@@ -108,6 +110,7 @@ if contract_type == "Host":
                 num_prisoners=num_prisoners,
                 prisoner_salary=prisoner_salary,
                 num_supervisors=num_supervisors,
+                customer_covers_supervisors=customer_covers_supervisors,
                 supervisor_salaries=supervisor_salaries,
                 region=region,
                 contracts=contracts,
@@ -119,6 +122,8 @@ if contract_type == "Host":
 
     if "host_df" in st.session_state:
         df = st.session_state["host_df"]
+        if customer_covers_supervisors:
+            df = df[~df["Item"].str.contains("Instructor Salary", na=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
         # Productivity slider
@@ -178,7 +183,7 @@ if contract_type == "Production":
                 name = st.text_input(f"Item {i+1} Name", key=f"name_{i}")
                 disp = (name.strip() or f"Item {i+1}") if isinstance(name, str) else f"Item {i+1}"
                 required = st.number_input(f"Prisoners required to make 1 item ({disp})", min_value=1, value=1, step=1, key=f"req_{i}")
-                minutes_per = st.number_input(f"How many minutes to make 1 item ({disp})", min_value=1.0, value=10.0, format="%.2f", key=f"mins_{i}")
+                minutes_per = st.number_input(f"How many minutes to make 1 item ({disp})", min_value=1.0, value=10.0, format="%.2f", key="mins_{i}")
 
                 total_assigned_before = sum(int(st.session_state.get(f"assigned_{j}", 0)) for j in range(i))
                 remaining = max(0, int(num_prisoners) - total_assigned_before)
@@ -221,7 +226,7 @@ if contract_type == "Production":
                         prisoner_salary=float(prisoner_salary),
                         supervisor_salaries=supervisor_salaries,
                         effective_pct=float(instructor_pct),
-                        customer_covers_supervisors=False,
+                        customer_covers_supervisors=customer_covers_supervisors,
                         region=region,
                         customer_type="Commercial",
                         apply_vat=True, vat_rate=20.0,
@@ -231,6 +236,7 @@ if contract_type == "Production":
                         pricing_mode=pricing_mode_key,
                         targets=targets if pricing_mode_key == "target" else None,
                         lock_overheads=lock_overheads,
+                        employment_support=employment_support,
                     )
                     display_cols = ["Item", "Output %", "Capacity (units/week)", "Units/week",
                                     "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
@@ -245,7 +251,7 @@ if contract_type == "Production":
 
                     st.session_state["prod_df"] = prod_df
 
-    else:  # ---------------- Ad-hoc ----------------
+    else:  # Ad-hoc
         num_lines = st.number_input("How many product lines are needed?", min_value=1, value=1, step=1, key="adhoc_num_lines")
         lines = []
         for i in range(int(num_lines)):
@@ -253,10 +259,10 @@ if contract_type == "Production":
                 c1, c2, c3 = st.columns([2, 1, 1])
                 with c1: item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
                 with c2: units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key=f"adhoc_units_{i}")
-                with c3: deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
+                with c3: deadline = st.date_input("Deadline", value=date.today(), key="adhoc_deadline_{i}")
                 c4, c5 = st.columns([1, 1])
-                with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
-                with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=1.0, value=10.0, format="%.2f", key=f"adhoc_mins_{i}")
+                with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key="adhoc_pris_req_{i}")
+                with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=1.0, value=10.0, format="%.2f", key="adhoc_mins_{i}")
                 lines.append({
                     "name": (item_name.strip() or f"Item {i+1}") if isinstance(item_name, str) else f"Item {i+1}",
                     "units": int(units_requested),
@@ -282,7 +288,7 @@ if contract_type == "Production":
                     prisoner_salary=float(prisoner_salary),
                     supervisor_salaries=supervisor_salaries,
                     effective_pct=float(instructor_pct),
-                    customer_covers_supervisors=False,
+                    customer_covers_supervisors=customer_covers_supervisors,
                     region=region,
                     customer_type="Commercial",
                     apply_vat=True, vat_rate=20.0,
@@ -291,56 +297,29 @@ if contract_type == "Production":
                     lock_overheads=lock_overheads,
                     employment_support=employment_support,
                 )
-                if result.get("feasibility", {}).get("hard_block"):
+                if result["feasibility"]["hard_block"]:
                     st.error(result["feasibility"]["reason"])
                 else:
-                    per_line = result.get("per_line", [])
-                    col_headers = [
-                        "Item", "Units",
-                        "Unit Cost (ex VAT £)", "Unit Cost (inc VAT £)",
-                        "Line Total (ex VAT £)", "Line Total (inc VAT £)"
-                    ]
+                    col_headers = ["Item", "Units",
+                                   "Unit Cost (ex VAT £)", "Unit Cost (inc VAT £)",
+                                   "Line Total (ex VAT £)", "Line Total (inc VAT £)"]
                     data_rows = []
-                    for p in per_line:
-                        name = p.get("name", "—")
-                        units = p.get("units", 0)
-
-                        def _f(x):
-                            try:
-                                return float(x)
-                            except Exception:
-                                return 0.0
-
-                        unit_ex = _f(p.get("unit_cost_ex_vat", 0))
-                        unit_in = _f(p.get("unit_cost_inc_vat", 0))
-                        line_ex = _f(p.get("line_total_ex_vat", 0))
-                        line_in = _f(p.get("line_total_inc_vat", 0))
-
+                    for p in result.get("per_line", []):
                         data_rows.append([
-                            name,
-                            f"{units:,}",
-                            f"{unit_ex:.2f}",
-                            f"{unit_in:.2f}",
-                            f"{line_ex:.2f}",
-                            f"{line_in:.2f}",
+                            p.get("name", "—"),
+                            f"{p.get('units', 0):,}",
+                            f"{p.get('unit_cost_ex_vat', 0):.2f}",
+                            f"{p.get('unit_cost_inc_vat', 0):.2f}",
+                            f"{p.get('line_total_ex_vat', 0):.2f}",
+                            f"{p.get('line_total_inc_vat', 0):.2f}",
                         ])
-
-                    if not data_rows:
-                        data_rows = [["—", "0", "0.00", "0.00", "0.00", "0.00"]]
-
                     df = pd.DataFrame(data_rows, columns=col_headers)
                     st.session_state["prod_df"] = df
 
-                    totals = result.get("totals", {})
-                    if totals:
-                        st.markdown(f"**Total ex VAT:** {fmt_currency(totals.get('ex_vat', 0))}")
-                        st.markdown(f"**Total inc VAT:** {fmt_currency(totals.get('inc_vat', 0))}")
-
-    # -------------------------------
-    # Show results
-    # -------------------------------
     if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
         df = st.session_state["prod_df"]
+        if customer_covers_supervisors and "Item" in df.columns:
+            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
         # Productivity slider
@@ -379,4 +358,3 @@ if contract_type == "Production":
                 file_name="production_quote.html",
                 mime="text/html"
             )
-     
