@@ -153,7 +153,7 @@ if contract_type == "Host":
             )
 
 # -------------------------------
-# PRODUCTION (Contractual / Ad-hoc)
+# PRODUCTION
 # -------------------------------
 if contract_type == "Production":
     st.markdown("---")
@@ -239,4 +239,104 @@ if contract_type == "Production":
                         display_cols += ["Feasible", "Note"]
 
                     prod_df = pd.DataFrame([{
-                        k: (None if r.get(k) is None else (round(float(r.get(k)), 2) if isinstance(r.get(k), (int, float))
+                        k: (None if r.get(k) is None else (round(float(r.get(k)), 2) if isinstance(r.get(k), (int, float)) else r.get(k)))
+                        for k in display_cols
+                    } for r in results])
+
+                    st.session_state["prod_df"] = prod_df
+
+    else:  # Ad-hoc
+        num_lines = st.number_input("How many product lines are needed?", min_value=1, value=1, step=1, key="adhoc_num_lines")
+        lines = []
+        for i in range(int(num_lines)):
+            with st.expander(f"Product line {i+1}", expanded=(i == 0)):
+                c1, c2, c3 = st.columns([2, 1, 1])
+                with c1: item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
+                with c2: units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key=f"adhoc_units_{i}")
+                with c3: deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
+                c4, c5 = st.columns([1, 1])
+                with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
+                with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=1.0, value=10.0, format="%.2f", key=f"adhoc_mins_{i}")
+                lines.append({
+                    "name": (item_name.strip() or f"Item {i+1}") if isinstance(item_name, str) else f"Item {i+1}",
+                    "units": int(units_requested),
+                    "deadline": deadline,
+                    "pris_per_item": int(pris_per_item),
+                    "mins_per_item": float(minutes_per_item),
+                })
+
+        if st.button("Generate Production Costs"):
+            errs = validate_inputs()
+            if workshop_hours <= 0: errs.append("Hours per week must be > 0 for Ad-hoc")
+            for i, ln in enumerate(lines):
+                if ln["units"] <= 0: errs.append(f"Line {i+1}: Units requested must be > 0")
+                if ln["pris_per_item"] <= 0: errs.append(f"Line {i+1}: Prisoners to make one must be > 0")
+                if ln["mins_per_item"] <= 0: errs.append(f"Line {i+1}: Minutes to make one must be > 0")
+            if errs:
+                st.error("Fix errors:\n- " + "\n- ".join(errs))
+            else:
+                result = calculate_adhoc(
+                    lines, int(prisoner_output),
+                    workshop_hours=float(workshop_hours),
+                    num_prisoners=int(num_prisoners),
+                    prisoner_salary=float(prisoner_salary),
+                    supervisor_salaries=supervisor_salaries,
+                    effective_pct=float(instructor_pct),
+                    customer_covers_supervisors=False,
+                    region=region,
+                    customer_type="Commercial",
+                    apply_vat=True, vat_rate=20.0,
+                    dev_rate=0.0,
+                    today=date.today(),
+                    lock_overheads=lock_overheads,
+                )
+                if result["feasibility"]["hard_block"]:
+                    st.error(result["feasibility"]["reason"])
+                else:
+                    col_headers = ["Item", "Units",
+                                   "Unit Cost (ex VAT £)", "Unit Cost (inc VAT £)",
+                                   "Line Total (ex VAT £)", "Line Total (inc VAT £)"]
+                    data_rows = []
+                    for p in result["per_line"]:
+                        data_rows.append([
+                            p["name"], f"{p['units']:,}",
+                            f"{p['unit_cost_ex_vat']:.2f}", f"{p['unit_cost_inc_vat']:.2f}",
+                            f"{p['line_total_ex_vat']:.2f}", f"{p['line_total_inc_vat']:.2f}",
+                        ])
+                    df = pd.DataFrame(data_rows, columns=col_headers)
+                    st.session_state["prod_df"] = df
+
+    if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
+        df = st.session_state["prod_df"]
+        st.markdown(render_table_html(df), unsafe_allow_html=True)
+
+        # Productivity slider
+        st.markdown("---")
+        prod_prod = st.slider("Adjust for Productivity (%)", 50, 100, 100, step=5, key="prod_adj_prod")
+
+        base_total = _get_base_total(df)
+        adjusted_total = base_total * (prod_prod / 100.0)
+        st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
+
+        if prod_prod < 100:
+            df_adj = adjust_table(df, prod_prod / 100.0)
+            st.markdown("### Adjusted Costs (for review only)")
+            st.markdown(render_table_html(df_adj), unsafe_allow_html=True)
+            st.caption("_Productivity assumptions applied — reviewed annually with Commercial._")
+
+            extra_note = (
+                f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
+                "<p><em>Productivity assumptions have been applied. These will be reviewed annually with Commercial.</em></p>"
+            )
+        else:
+            df_adj, extra_note = None, None
+
+        c1, c2 = st.columns(2)
+        with c1: 
+            st.download_button("Download CSV (Production)", data=export_csv_bytes(df), file_name="production_quote.csv", mime="text/csv")
+        with c2: 
+            st.download_button(
+                "Download PDF-ready HTML (Production)",
+                data=export_html(None, df, title="Production Quote", extra_note=extra_note, adjusted_df=df_adj),
+                file_name="production_quote.html", mime="text/html"
+            )
