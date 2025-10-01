@@ -258,7 +258,7 @@ if contract_type == "Production":
             with st.expander(f"Product line {i+1}", expanded=(i == 0)):
                 c1, c2, c3 = st.columns([2, 1, 1])
                 with c1: item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
-                with c2: units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key=f"adhoc_units_{i}")
+                with c2: units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key="adhoc_units_{i}")
                 with c3: deadline = st.date_input("Deadline", value=date.today(), key="adhoc_deadline_{i}")
                 c4, c5 = st.columns([1, 1])
                 with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key="adhoc_pris_req_{i}")
@@ -305,13 +305,31 @@ if contract_type == "Production":
                                    "Line Total (ex VAT £)", "Line Total (inc VAT £)"]
                     data_rows = []
                     for p in result.get("per_line", []):
+                        name = p.get("name", "—")
+                        units = p.get("units", 0)
+                        try:
+                            u_ex = float(p.get("unit_cost_ex_vat", 0))
+                        except Exception:
+                            u_ex = 0.0
+                        try:
+                            u_in = float(p.get("unit_cost_inc_vat", 0))
+                        except Exception:
+                            u_in = 0.0
+                        try:
+                            l_ex = float(p.get("line_total_ex_vat", 0))
+                        except Exception:
+                            l_ex = 0.0
+                        try:
+                            l_in = float(p.get("line_total_inc_vat", 0))
+                        except Exception:
+                            l_in = 0.0
                         data_rows.append([
-                            p.get("name", "—"),
-                            f"{p.get('units', 0):,}",
-                            f"{p.get('unit_cost_ex_vat', 0):.2f}",
-                            f"{p.get('unit_cost_inc_vat', 0):.2f}",
-                            f"{p.get('line_total_ex_vat', 0):.2f}",
-                            f"{p.get('line_total_inc_vat', 0):.2f}",
+                            name,
+                            f"{units:,}",
+                            f"{u_ex:.2f}",
+                            f"{u_in:.2f}",
+                            f"{l_ex:.2f}",
+                            f"{l_in:.2f}",
                         ])
                     df = pd.DataFrame(data_rows, columns=col_headers)
                     st.session_state["prod_df"] = df
