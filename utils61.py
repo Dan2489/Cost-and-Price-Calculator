@@ -9,13 +9,10 @@ def inject_govuk_css():
     st.markdown(
         """
         <style>
-          /* GOV.UK colours */
           :root {
             --govuk-green: #00703c;
             --govuk-yellow: #ffdd00;
           }
-
-          /* Buttons */
           .stButton > button {
             background: var(--govuk-green) !important;
             color: #fff !important;
@@ -24,30 +21,20 @@ def inject_govuk_css():
             font-weight: 600;
           }
           .stButton > button:hover { filter: brightness(0.95); }
-          .stButton > button:focus, .stButton > button:focus-visible {
+          .stButton > button:focus {
             outline: 3px solid var(--govuk-yellow) !important;
-            outline-offset: 0 !important;
             box-shadow: 0 0 0 1px #000 inset !important;
           }
-
-          /* Tables */
-          table.custom { 
-            width: 100%; 
-            border-collapse: collapse; 
-            margin: 12px 0; 
+          table.custom { width: 100%; border-collapse: collapse; margin: 12px 0; }
+          table.custom th, table.custom td {
+            border: 1px solid #b1b4b6;
+            padding: 6px 10px;
+            text-align: left;
           }
-          table.custom th, table.custom td { 
-            border: 1px solid #b1b4b6; 
-            padding: 6px 10px; 
-            text-align: left; 
-          }
-          table.custom th { 
-            background: #f3f2f1; 
-            font-weight: bold; 
-          }
+          table.custom th { background: #f3f2f1; font-weight: bold; }
           table.custom td.neg { color: #d4351c; }
           table.custom tr.grand td { font-weight: bold; }
-          table.custom.highlight { background-color: #fff8dc; } /* light yellow */
+          table.custom.highlight { background-color: #fff8dc; }
         </style>
         """,
         unsafe_allow_html=True
@@ -84,25 +71,12 @@ def export_csv_bytes(df: pd.DataFrame) -> bytes:
 
 def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
                 title: str, extra_note: str = None, adjusted_df: pd.DataFrame = None) -> str:
-    """Export to standalone HTML for PDF generation."""
     styles = """
     <style>
         body { font-family: Arial, sans-serif; }
-        h1, h2, h3 { margin-top: 1em; }
-        table.custom { 
-            width: 100%; 
-            border-collapse: collapse; 
-            margin: 12px 0; 
-        }
-        table.custom th, table.custom td { 
-            border: 1px solid #b1b4b6; 
-            padding: 6px 10px; 
-            text-align: left; 
-        }
-        table.custom th { 
-            background: #f3f2f1; 
-            font-weight: bold; 
-        }
+        table.custom { width: 100%; border-collapse: collapse; margin: 12px 0; }
+        table.custom th, table.custom td { border: 1px solid #b1b4b6; padding: 6px 10px; text-align: left; }
+        table.custom th { background: #f3f2f1; font-weight: bold; }
         table.custom.highlight { background-color: #fff8dc; }
     </style>
     """
@@ -127,16 +101,13 @@ def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
 # Table rendering
 # -------------------------------
 def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
-    """Render DataFrame as styled HTML table with GOV.UK styles and currency formatting."""
     if df is None or df.empty:
         return "<p><em>No data</em></p>"
 
     df_fmt = df.copy()
     for col in df_fmt.columns:
         if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand"]):
-            df_fmt[col] = pd.to_numeric(df_fmt[col], errors="coerce").map(
-                lambda x: fmt_currency(x) if pd.notnull(x) else ""
-            )
+            df_fmt[col] = df_fmt[col].apply(lambda x: fmt_currency(str(x).replace("£", "").replace(",", "")) if pd.notnull(x) else "")
 
     cls = "custom highlight" if highlight else "custom"
     return df_fmt.to_html(index=False, classes=cls, border=0, justify="left", escape=False)
@@ -145,10 +116,7 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
 # Adjust table for productivity
 # -------------------------------
 def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
-    """
-    Scale numeric/currency values by factor and return formatted copy.
-    Works for Host and Production tables.
-    """
+    """Scale numeric/currency values by factor and return formatted copy."""
     if df is None or df.empty:
         return df
 
