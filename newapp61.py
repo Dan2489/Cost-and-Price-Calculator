@@ -8,6 +8,7 @@ import host61
 import production61
 from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from utils61 import inject_govuk_css, fmt_currency, export_csv_bytes, export_html
+from utils61 import sidebar_controls  # sidebar with lock overheads, allocation, prisoner output
 
 
 # -------------------------------------------------------------------
@@ -17,6 +18,11 @@ st.set_page_config(page_title="Cost and Price Calculator", page_icon="💷", lay
 inject_govuk_css()
 
 st.title("Cost and Price Calculator")
+
+# -------------------------------------------------------------------
+# Sidebar controls (unchanged from baseline)
+# -------------------------------------------------------------------
+lock_overheads, instructor_pct, prisoner_output = sidebar_controls(CFG.GLOBAL_OUTPUT_DEFAULT)
 
 # -------------------------------------------------------------------
 # Base Inputs
@@ -110,6 +116,8 @@ if contract_type == "Host":
                 region=region,
                 contracts=contracts,
                 employment_support=employment_support,
+                instructor_allocation=instructor_pct,
+                lock_overheads=lock_overheads,
             )
 
             st.markdown(df.to_html(index=False), unsafe_allow_html=True)
@@ -163,6 +171,9 @@ if contract_type == "Production":
                 region=region,
                 contracts=contracts,
                 employment_support=employment_support,
+                instructor_allocation=instructor_pct,
+                lock_overheads=lock_overheads,
+                prisoner_output=prisoner_output,
             )
 
             st.markdown(df.to_html(index=False), unsafe_allow_html=True)
