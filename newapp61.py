@@ -122,7 +122,6 @@ if contract_type == "Host":
 
     if "host_df" in st.session_state:
         df = st.session_state["host_df"]
-        # If customer provides instructors, hide Instructor Salary row
         if customer_covers_supervisors:
             df = df[~df["Item"].str.contains("Instructor Salary", na=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
@@ -305,21 +304,22 @@ if contract_type == "Production":
                                    "Unit Cost (ex VAT £)", "Unit Cost (inc VAT £)",
                                    "Line Total (ex VAT £)", "Line Total (inc VAT £)"]
                     data_rows = []
-                    for p in result["per_line"]:
+                    for p in result.get("per_line", []):
                         data_rows.append([
-                            p["name"], f"{p['units']:,}",
-                            f"{p['unit_cost_ex_vat']:.2f}", f"{p['unit_cost_inc_vat']:.2f}",
-                            f"{p['line_total_ex_vat']:.2f}", f"{p['line_total_inc_vat']:.2f}",
+                            p.get("name", "—"),
+                            f"{p.get('units', 0):,}",
+                            f"{p.get('unit_cost_ex_vat', 0):.2f}",
+                            f"{p.get('unit_cost_inc_vat', 0):.2f}",
+                            f"{p.get('line_total_ex_vat', 0):.2f}",
+                            f"{p.get('line_total_inc_vat', 0):.2f}",
                         ])
                     df = pd.DataFrame(data_rows, columns=col_headers)
                     st.session_state["prod_df"] = df
 
     if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
         df = st.session_state["prod_df"]
-        # Hide Instructor Salary row if customer provides
-        if customer_covers_supervisors:
-            if "Item" in df.columns:
-                df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
+        if customer_covers_supervisors and "Item" in df.columns:
+            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
         # Productivity slider
@@ -344,3 +344,8 @@ if contract_type == "Production":
             df_adj, extra_note = None, None
 
         c1, c2 = st.columns(2)
+        with c1: 
+            st.download_button("Download CSV (Production)", data=export_csv_bytes(df), file_name="production_quote.csv", mime="text/csv")
+        with c2: 
+            st.download_button(
+                "Download PDF-ready HTML
