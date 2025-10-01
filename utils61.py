@@ -1,22 +1,29 @@
-from io import BytesIO
-from datetime import date
+import io
 import pandas as pd
-import streamlit as st
 
-def inject_govuk_css() -> None:
+# -------------------------------
+# Inject GOV.UK styling
+# -------------------------------
+def inject_govuk_css():
+    import streamlit as st
     st.markdown(
         """
         <style>
-          body { font-family: Arial, Helvetica, sans-serif; }
-          table { width:100%; border-collapse: collapse; margin: 12px 0; }
-          th, td { border-bottom: 1px solid #b1b4b6; padding: 8px; text-align: left; }
-          th { background: #f3f2f1; }
-          td.neg { color: #d4351c; }
-          tr.grand td { font-weight: 700; }
+          /* Sidebar */
+          [data-testid="stSidebar"] {
+            min-width: 320px !important;
+            max-width: 320px !important;
+          }
 
-          /* GOV.UK buttons */
+          /* GOV.UK colours */
+          :root {
+            --govuk-green: #00703c;
+            --govuk-yellow: #ffdd00;
+          }
+
+          /* Buttons */
           .stButton > button {
-            background: #00703c !important;
+            background: var(--govuk-green) !important;
             color: #fff !important;
             border: 2px solid transparent !important;
             border-radius: 0 !important;
@@ -24,122 +31,133 @@ def inject_govuk_css() -> None:
           }
           .stButton > button:hover { filter: brightness(0.95); }
           .stButton > button:focus, .stButton > button:focus-visible {
-            outline: 3px solid #ffdd00 !important;
+            outline: 3px solid var(--govuk-yellow) !important;
             outline-offset: 0 !important;
             box-shadow: 0 0 0 1px #000 inset !important;
           }
 
-          [data-testid="stSidebar"] {
-            min-width: unset !important;
-            max-width: unset !important;
+          /* Tables */
+          table.custom { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin: 12px 0; 
           }
+          table.custom th, table.custom td { 
+            border: 1px solid #b1b4b6; 
+            padding: 6px 10px; 
+            text-align: left; 
+          }
+          table.custom th { 
+            background: #f3f2f1; 
+            font-weight: bold; 
+          }
+          table.custom td.neg { color: #d4351c; }
+          table.custom tr.grand td { font-weight: bold; }
+          table.custom.highlight { background-color: #fff8dc; } /* light yellow for adjusted */
         </style>
         """,
         unsafe_allow_html=True
     )
 
-def fmt_currency(v) -> str:
-    try:
-        return f"£{float(v):,.2f}"
-    except Exception:
-        return ""
-
-def export_csv_bytes(df: pd.DataFrame) -> BytesIO:
-    b = BytesIO()
-    df.to_csv(b, index=False)
-    b.seek(0)
-    return b
-
-def export_html(host_df=None, prod_df=None, title="Quote", extra_note=None, adjusted_df=None) -> BytesIO:
-    css = """
-      <style>
-        body{font-family:Arial,Helvetica,sans-serif;color:#0b0c0c;}
-        table{width:100%;border-collapse:collapse;margin:12px 0;}
-        th,td{border:1px solid #b1b4b6;padding:8px;text-align:left;}
-        th{background:#f3f2f1;} td.neg{color:#d4351c;} tr.grand td{font-weight:700;}
-        h1,h2,h3{margin:0.2rem 0;}
-      </style>
-    """
-    header_html = f"<h2>{title}</h2>"
-    meta = (f"<p>Date: {date.today().strftime('%d/%m/%Y')}<br/>"
-            f"Customer: {st.session_state.get('customer_name','')}<br/>"
-            f"Prison: {st.session_state.get('prison_choice','')}<br/>"
-            f"Region: {st.session_state.get('region','')}</p>")
-    parts = [css, header_html, meta]
-
-    if host_df is not None:
-        parts += ["<h3>Host Costs</h3>", host_df.to_html(index=False, border=1)]
-    if prod_df is not None:
-        parts += ["<h3>Production Items</h3>", prod_df.to_html(index=False, border=1)]
-
-    if adjusted_df is not None:
-        parts += ["<h3>Adjusted Costs (for review only)</h3>", adjusted_df.to_html(index=False, border=1)]
-        parts.append("<p><em>Productivity assumptions applied — reviewed annually with Commercial.</em></p>")
-
-    if extra_note:
-        parts.append(extra_note)
-
-    parts.append("<p>Prices are indicative and may change based on final scope and site conditions.</p>")
-    html_doc = f"""<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>{title}</title></head><body>{''.join(parts)}</body></html>"""
-    b = BytesIO(html_doc.encode("utf-8")); b.seek(0); return b
-
-def sidebar_controls(default_output: int = 100):
+# -------------------------------
+# Sidebar controls
+# -------------------------------
+def sidebar_controls(default_output: int):
+    import streamlit as st
     with st.sidebar:
         st.header("Controls")
-        lock_overheads = st.checkbox("Lock overheads to highest instructor salary?", value=False)
-        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, 100, step=5,
-                                   help="How much of instructor salary is applied to this quote")
-        prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output, step=5,
-                                    help="Effective productivity of prisoner labour")
+        lock_overheads = st.checkbox("Lock overheads to highest instructor", value=False)
+        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, 100, step=5)
+        prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output, step=5)
     return lock_overheads, instructor_pct, prisoner_output
 
-def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
-    """Render DataFrame as HTML table with optional highlight background."""
-    if df is None or not isinstance(df, pd.DataFrame): 
-        return ""
-    df2 = df.copy()
+# -------------------------------
+# Formatters
+# -------------------------------
+def fmt_currency(val) -> str:
+    try:
+        return f"£{val:,.2f}"
+    except Exception:
+        return str(val)
 
-    currency_cols = {
-        "Amount (£)", "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
-        "Monthly Total ex VAT (£)", "Monthly Total inc VAT (£)", "Monthly Total (£)",
-        "Subtotal", "VAT (20%)", "Grand Total (£/month)"
-    }
-    for col in df2.columns:
-        if col in currency_cols or "£" in str(col):
-            try:
-                df2[col] = pd.to_numeric(
-                    df2[col].astype(str).str.replace("£", "").str.replace(",", ""), 
-                    errors="coerce"
-                ).map(lambda x: fmt_currency(x) if pd.notna(x) else "")
-            except Exception:
-                pass
+# -------------------------------
+# Export functions
+# -------------------------------
+def export_csv_bytes(df: pd.DataFrame) -> bytes:
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    return buf.getvalue().encode("utf-8")
 
-    style = """
-      <style>
-        table.custom {width:100%;border-collapse:collapse;margin:12px 0;}
-        table.custom th, table.custom td {border:1px solid #b1b4b6;padding:8px;text-align:left;}
-        table.custom th {background:#f3f2f1;}
-        table.custom td.neg {color:#d4351c;}
-        table.custom tr.grand td {font-weight:700;}
-      </style>
+def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
+                title: str, extra_note: str = None, adjusted_df: pd.DataFrame = None) -> str:
+    """Export to standalone HTML for PDF generation."""
+    styles = """
+    <style>
+        body { font-family: Arial, sans-serif; }
+        h1, h2, h3 { margin-top: 1em; }
+        table.custom { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin: 12px 0; 
+        }
+        table.custom th, table.custom td { 
+            border: 1px solid #b1b4b6; 
+            padding: 6px 10px; 
+            text-align: left; 
+        }
+        table.custom th { 
+            background: #f3f2f1; 
+            font-weight: bold; 
+        }
+        table.custom.highlight { background-color: #fff8dc; }
+    </style>
     """
-    table_html = df2.to_html(index=False, classes="custom", border=0, escape=False)
-    if highlight:
-        table_html = table_html.replace('<table class="custom">', '<table class="custom" style="background:#fff9db;">')
-    return style + table_html
+    html = f"<html><head>{styles}</head><body>"
+    html += f"<h1>{title}</h1>"
 
+    if df_host is not None:
+        html += df_host.to_html(index=False, classes="custom", border=0, justify="left")
+
+    if df_prod is not None:
+        html += df_prod.to_html(index=False, classes="custom", border=0, justify="left")
+
+    if adjusted_df is not None:
+        html += "<h3>Adjusted Costs (for review only)</h3>"
+        html += adjusted_df.to_html(index=False, classes="custom highlight", border=0, justify="left")
+
+    if extra_note:
+        html += f"<div style='margin-top:1em'>{extra_note}</div>"
+
+    html += "</body></html>"
+    return html
+
+# -------------------------------
+# Table rendering
+# -------------------------------
+def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
+    """Render DataFrame as styled HTML table with GOV.UK styles."""
+    if df is None or df.empty:
+        return "<p><em>No data</em></p>"
+
+    cls = "custom highlight" if highlight else "custom"
+    return df.to_html(index=False, classes=cls, border=0, justify="left")
+
+# -------------------------------
+# Adjust table for productivity
+# -------------------------------
 def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
-    """Return a new DataFrame with all £ columns scaled by factor (0–1)."""
+    """Return a copy of df with numeric values scaled by factor."""
     df_adj = df.copy()
     for col in df_adj.columns:
-        if "£" in str(col) or col in ["Amount (£)", "Subtotal", "VAT (20%)", "Grand Total (£/month)"]:
-            try:
-                raw = pd.to_numeric(
-                    df_adj[col].astype(str).str.replace("£", "").str.replace(",", ""), 
-                    errors="coerce"
-                )
-                df_adj[col] = raw * factor
-                df_adj[col] = df_adj[col].map(lambda x: fmt_currency(x) if pd.notna(x) else "")
-            except Exception:
-                pass
+        if pd.api.types.is_numeric_dtype(df_adj[col]):
+            df_adj[col] = df_adj[col].apply(lambda x: x * factor if pd.notnull(x) else x)
+        else:
+            # Try to strip currency signs
+            def try_parse(val):
+                try:
+                    val_f = float(str(val).replace("£", "").replace(",", ""))
+                    return f"£{val_f * factor:,.2f}"
+                except Exception:
+                    return val
+            df_adj[col] = df_adj[col].apply(try_parse)
     return df_adj
