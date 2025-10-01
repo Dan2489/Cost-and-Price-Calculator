@@ -5,8 +5,12 @@ from datetime import date
 from config61 import CFG
 from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from utils61 import (
-    inject_govuk_css, sidebar_controls, fmt_currency,
-    export_csv_bytes, export_html, render_table_html, adjust_table
+    inject_govuk_css,
+    sidebar_controls,
+    fmt_currency,
+    render_table_html,
+    adjust_table,
+    build_html_page
 )
 from production61 import (
     labour_minutes_budget,
