@@ -110,7 +110,7 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
         item = str(row["Item"])
         val = row["Amount (£)"]
 
-        # format value
+        # format value (prevent double "£")
         try:
             v = float(str(val).replace("£", "").replace(",", ""))
             val_fmt = fmt_currency(v)
