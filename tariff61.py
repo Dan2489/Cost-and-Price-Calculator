@@ -1,5 +1,5 @@
 # tariff61.py
-# Full Prison -> Region mapping and Supervisor pay bands + Band 3 shadow costs.
+# Prison-to-region mapping, Band 3 shadow costs, and Supervisor pay bands
 
 PRISON_TO_REGION = {
     "Altcourse": "National", "Ashfield": "National", "Askham Grange": "National",
@@ -46,24 +46,25 @@ PRISON_TO_REGION = {
     "Wormwood Scrubs": "Inner London", "Wymott": "National",
 }
 
-SUPERVISOR_PAY = {
-    "Inner London": [
-        {"title": "Production Instructor: Band 3", "avg_total": 49202.70},
-        {"title": "Specialist Instructor: Band 4", "avg_total": 55632.00},
-    ],
-    "Outer London": [
-        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 69584.00},
-        {"title": "Production Instructor: Band 3", "avg_total": 45855.97},
-    ],
-    "National": [
-        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 48969.00},
-        {"title": "Production Instructor: Band 3", "avg_total": 42247.81},
-    ],
-}
-
-# Band 3 shadow costs (annual) used ONLY when customer provides instructors (for overhead base)
+# Band 3 shadow costs (annual) — used if customer provides instructor(s)
 BAND3_COSTS = {
     "Outer London": 45855.97,
     "Inner London": 49202.70,
     "National": 42247.81,
+}
+
+# Supervisor pay bands
+SUPERVISOR_PAY = {
+    "Inner London": [
+        {"title": "Production Instructor: Band 3", "avg_total": 49203},
+        {"title": "Specialist Instructor: Band 4", "avg_total": 55632},
+    ],
+    "Outer London": [
+        {"title": "Production Instructor: Band 3", "avg_total": 45856},
+        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 69584},
+    ],
+    "National": [
+        {"title": "Production Instructor: Band 3", "avg_total": 42248},
+        {"title": "Prison Officer Specialist - Instructor: Band 4", "avg_total": 48969},
+    ],
 }
