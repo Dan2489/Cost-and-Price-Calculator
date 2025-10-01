@@ -7,7 +7,7 @@ import pandas as pd
 from typing import Tuple
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Styling
+# Styling (keep the look the same; do NOT pin sidebar width so it can close)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def inject_govuk_css() -> None:
@@ -19,23 +19,7 @@ def inject_govuk_css() -> None:
             --govuk-yellow:#ffdd00;
           }
 
-          /* Sidebar sizing & close on mobile */
-          [data-testid="stSidebar"]{
-            min-width:300px !important;
-            max-width:300px !important;
-          }
-          @media (max-width: 800px){
-            [data-testid="stSidebar"]{
-              min-width:0 !important;
-              max-width:0 !important;
-              width:0 !important;
-              overflow:hidden !important;
-              padding:0 !important;
-              border:0 !important;
-            }
-          }
-
-          /* Buttons */
+          /* Primary buttons stay green */
           .stButton > button{
             background: var(--govuk-green) !important;
             color:#fff !important;
@@ -49,7 +33,7 @@ def inject_govuk_css() -> None:
             box-shadow:none !important;
           }
 
-          /* Tables */
+          /* GOV.UK-ish tables */
           table.custom{
             width:100%;
             border-collapse:collapse;
@@ -59,9 +43,13 @@ def inject_govuk_css() -> None:
             border:1px solid #b1b4b6;
             padding:6px 10px;
             text-align:left;
+            vertical-align:top;
           }
-          table.custom th{ background:#f3f2f1; font-weight:700; }
-          table.custom.highlight td{ background:#fff7e6; }
+          table.custom th{
+            background:#f3f2f1;
+            font-weight:700;
+          }
+          table.custom.highlight td{ background:#fff7e6; } /* adjusted view */
         </style>
         """,
         unsafe_allow_html=True
@@ -73,12 +61,13 @@ def inject_govuk_css() -> None:
 
 def fmt_currency(val) -> str:
     try:
+        # accept preformatted strings too
         return f"£{float(str(val).replace('£','').replace(',','')):,.2f}"
     except Exception:
         return str(val)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Sidebar controls
+# Sidebar controls (exact names the app expects)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def sidebar_controls(default_output: int = 100) -> Tuple[bool, int, int]:
@@ -90,19 +79,21 @@ def sidebar_controls(default_output: int = 100) -> Tuple[bool, int, int]:
             key="lock_overheads",
         )
         instructor_pct = st.slider(
-            "Instructor allocation (%)", 0, 100,
+            "Instructor allocation (%)",
+            0, 100,
             int(st.session_state.get("instructor_pct", 100)),
             key="instructor_pct",
         )
         prisoner_output = st.slider(
-            "Prisoner labour output (%)", 0, 100,
+            "Prisoner labour output (%)",
+            0, 100,
             int(st.session_state.get("prisoner_output", default_output)),
             key="prisoner_output",
         )
     return lock_overheads, instructor_pct, prisoner_output
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Table adjustment + HTML helpers
+# Table adjustment + HTML helpers (for productivity slider + downloads)
 # ──────────────────────────────────────────────────────────────────────────────
 
 _NUMERIC_HINTS = ("£", "Cost", "Total", "Price", "VAT", "Grand")
@@ -114,7 +105,9 @@ def _try_number(x):
         return None
 
 def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
-    if df is None or df.empty: return df
+    """Scale numeric/currency columns by factor; keep all rows/cols; return £-formatted copy."""
+    if df is None or df.empty:
+        return df
     out = df.copy()
     for col in out.columns:
         if any(key in str(col) for key in _NUMERIC_HINTS):
@@ -122,6 +115,7 @@ def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
     return out
 
 def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
+    """Render DataFrame as bordered, left-aligned table with currency columns formatted."""
     if df is None or df.empty:
         return "<p><em>No data</em></p>"
     df_fmt = df.copy()
@@ -132,6 +126,7 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
     return df_fmt.to_html(index=False, classes=cls, border=0, justify="left", escape=False)
 
 def build_html_page(title: str, body_html: str) -> str:
+    """Wrap content in a minimal UTF-8 HTML document so £ doesn’t show as Â£."""
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -141,7 +136,7 @@ def build_html_page(title: str, body_html: str) -> str:
     body{{font-family:Arial,Helvetica,sans-serif; font-size:14px; color:#0b0c0c;}}
     h1,h2{{margin:0 0 8px 0}}
     table.custom{{width:100%; border-collapse:collapse; margin:12px 0}}
-    table.custom th, table.custom td{{border:1px solid #b1b4b6; padding:6px 10px; text-align:left}}
+    table.custom th, table.custom td{{border:1px solid #b1b4b6; padding:6px 10px; text-align:left; vertical-align:top}}
     table.custom th{{background:#f3f2f1; font-weight:700}}
     table.custom.highlight td{{background:#fff7e6}}
     .caption{{margin:8px 0 16px 0; color:#505a5f}}
