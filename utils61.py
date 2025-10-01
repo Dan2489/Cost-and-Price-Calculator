@@ -13,10 +13,26 @@ def inject_govuk_css() -> None:
           th { background: #f3f2f1; }
           td.neg { color: #d4351c; }
           tr.grand td { font-weight: 700; }
-          /* Sidebar controls */
+
+          /* GOV.UK button colours */
+          .stButton > button {
+            background: #00703c !important;
+            color: #fff !important;
+            border: 2px solid transparent !important;
+            border-radius: 0 !important;
+            font-weight: 600;
+          }
+          .stButton > button:hover { filter: brightness(0.95); }
+          .stButton > button:focus, .stButton > button:focus-visible {
+            outline: 3px solid #ffdd00 !important;
+            outline-offset: 0 !important;
+            box-shadow: 0 0 0 1px #000 inset !important;
+          }
+
+          /* Sidebar responsive */
           [data-testid="stSidebar"] {
-            min-width: 320px !important;
-            max-width: 320px !important;
+            min-width: unset !important;
+            max-width: unset !important;
           }
         </style>
         """,
@@ -75,7 +91,6 @@ def export_html(host_df=None, prod_df=None, title="Quote", extra_note=None) -> B
     b = BytesIO(html_doc.encode("utf-8"))
     b.seek(0)
     return b
-
 
 # -------------------------------------------------------------------
 # Sidebar controls
