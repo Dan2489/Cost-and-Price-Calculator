@@ -182,8 +182,8 @@ if contract_type == "Production":
             with st.expander(f"Item {i+1} details", expanded=(i == 0)):
                 name = st.text_input(f"Item {i+1} Name", key=f"name_{i}")
                 disp = (name.strip() or f"Item {i+1}") if isinstance(name, str) else f"Item {i+1}"
-                required = st.number_input(f"Prisoners required to make 1 item ({disp})", min_value=1, value=1, step=1, key=f"req_{i}")
-                minutes_per = st.number_input(f"How many minutes to make 1 item ({disp})", min_value=1.0, value=10.0, format="%.2f", key=f"mins_{i}")
+                required = st.number_input(f"Prisoners required to make 1 item ({disp})", min_value=1, value=1, step=1, key="req_{i}")
+                minutes_per = st.number_input(f"How many minutes to make 1 item ({disp})", min_value=1.0, value=10.0, format="%.2f", key="mins_{i}")
 
                 total_assigned_before = sum(int(st.session_state.get(f"assigned_{j}", 0)) for j in range(i))
                 remaining = max(0, int(num_prisoners) - total_assigned_before)
@@ -202,7 +202,7 @@ if contract_type == "Production":
 
                 if pricing_mode_key == "target":
                     tgt_default = int(round(cap_planned)) if cap_planned > 0 else 0
-                    tgt = st.number_input(f"Target units per week ({disp})", min_value=0, value=tgt_default, step=1, key=f"target_{i}")
+                    tgt = st.number_input(f"Target units per week ({disp})", min_value=0, value=tgt_default, step=1, key="target_{i}")
                     targets.append(int(tgt))
 
                 items.append({"name": name, "required": int(required), "minutes": float(minutes_per), "assigned": int(assigned)})
@@ -258,11 +258,11 @@ if contract_type == "Production":
             with st.expander(f"Product line {i+1}", expanded=(i == 0)):
                 c1, c2, c3 = st.columns([2, 1, 1])
                 with c1: item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
-                with c2: units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key=f"adhoc_units_{i}")
-                with c3: deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
+                with c2: units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key="adhoc_units_{i}")
+                with c3: deadline = st.date_input("Deadline", value=date.today(), key="adhoc_deadline_{i}")
                 c4, c5 = st.columns([1, 1])
-                with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
-                with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=1.0, value=10.0, format="%.2f", key=f"adhoc_mins_{i}")
+                with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key="adhoc_pris_req_{i}")
+                with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=1.0, value=10.0, format="%.2f", key="adhoc_mins_{i}")
                 lines.append({
                     "name": (item_name.strip() or f"Item {i+1}") if isinstance(item_name, str) else f"Item {i+1}",
                     "units": int(units_requested),
@@ -345,11 +345,10 @@ if contract_type == "Production":
 
         c1, c2 = st.columns(2)
         with c1: 
-            st.download_button("Download CSV (Production)", data=export_csv_bytes(df), file_name="production_quote.csv", mime="text/csv")
-        with c2: 
             st.download_button(
-                "Download PDF-ready HTML
-c1, c2 = st.columns(2)
+                "Download CSV (Production)",
+                data=export_csv_bytes(df),
+                file
         with c1: 
             st.download_button(
                 "Download CSV (Production)",
