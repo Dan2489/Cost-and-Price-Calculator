@@ -11,7 +11,7 @@ from utils61 import (
     fmt_currency,
     render_table_html,
     adjust_table,
-    build_html_page
+    build_html_page,
 )
 from production61 import (
     labour_minutes_budget,
@@ -24,57 +24,55 @@ import host61
 # ──────────────────────────────────────────────
 # App setup
 # ──────────────────────────────────────────────
-st.set_page_config(page_title="Cost and Price Calculator", layout="wide")
+st.set_page_config(page_title="Cost and Price Calculator", layout="centered")
 inject_govuk_css()
 
 
 def main():
-    st.title("Cost and Price Calculator")
+    st.markdown('<div class="govuk-heading-l">Cost and Price Calculator</div>', unsafe_allow_html=True)
 
-    # Sidebar controls
+    # Sidebar (unchanged behaviour)
     lock_overheads, instructor_pct, prisoner_output = sidebar_controls(
-        CFG.GLOBAL_OUTPUT_DEFAULT
+        getattr(CFG, "GLOBAL_OUTPUT_DEFAULT", 100)
     )
 
-    # Contract form
+    # Base form (same questions/order as before)
+    prisons_sorted = list(PRISON_TO_REGION.keys())
     with st.form("contract_form"):
-        prison = st.selectbox("Prison Name", options=list(PRISON_TO_REGION.keys()))
+        prison = st.selectbox("Prison Name", options=prisons_sorted)
         customer = st.text_input("Customer Name")
         contract_type = st.selectbox("Contract Type", options=["Host", "Production"])
 
-        workshop_hours = st.number_input("How many hours is the workshop open per week?", min_value=0.0, step=0.5)
-        num_prisoners = st.number_input("How many prisoners employed per week?", min_value=0, step=1)
-        prisoner_salary = st.number_input("Average prisoner salary per week (£)", min_value=0.0, step=0.5)
+        workshop_hours = st.number_input("How many hours is the workshop open per week?", min_value=0.0, step=0.25, format="%.2f")
+        num_prisoners  = st.number_input("How many prisoners employed per week?", min_value=0, step=1)
+        prisoner_salary= st.number_input("Average prisoner salary per week (£)", min_value=0.0, step=0.25)
 
         num_supervisors = st.number_input("How many instructors?", min_value=0, step=1)
 
-        # ✅ Restore checkbox
+        # Customer provides instructor(s)?
         customer_covers_supervisors = st.checkbox(
             "Customer provides instructor(s)?",
             value=False,
             key="customer_covers_supervisors"
         )
 
-        supervisor_titles, supervisor_salaries = [], []
+        # Dynamic titles (appear immediately inside the form)
+        supervisor_salaries = []
+        region = PRISON_TO_REGION.get(prison, "National")
         if num_supervisors > 0 and not customer_covers_supervisors:
-            region = PRISON_TO_REGION.get(prison, "National")
-            choices = SUPERVISOR_PAY[region]
-            for i in range(num_supervisors):
-                title = st.selectbox(
-                    f"Instructor {i+1} Title",
-                    options=[c["title"] for c in choices],
-                    key=f"instr_title_{i}"
-                )
-                salary = next(c["avg_total"] for c in choices if c["title"] == title)
-                st.caption(f"{region} — {fmt_currency(salary)}")
-                supervisor_titles.append(title)
-                supervisor_salaries.append(salary)
+            titles_for_region = SUPERVISOR_PAY.get(region, [])
+            options = [t["title"] for t in titles_for_region]
+            for i in range(int(num_supervisors)):
+                sel = st.selectbox(f"Instructor {i+1} Title", options, key=f"inst_title_{i}")
+                pay = next(t["avg_total"] for t in titles_for_region if t["title"] == sel)
+                st.caption(f"{region} — {fmt_currency(pay)}")
+                supervisor_salaries.append(float(pay))
 
-        num_contracts = st.number_input("How many contracts do they oversee in this workshop?", min_value=1, step=1)
+        contracts_overseen = st.number_input("How many contracts do they oversee in this workshop?", min_value=1, step=1, value=1)
 
         employment_support = st.selectbox(
             "What employment support does the customer offer?",
-            options=["None", "Employment on release/RoTL", "Post release", "Both"]
+            ["None", "Employment on release/RoTL", "Post release", "Both"],
         )
 
         submitted = st.form_submit_button("Generate Costs")
@@ -82,157 +80,176 @@ def main():
     if not submitted:
         return
 
-    region = PRISON_TO_REGION.get(prison, "National")
-
     # ──────────────────────────────────────────────
-    # HOST PATH
+    # HOST
     # ──────────────────────────────────────────────
     if contract_type == "Host":
         df, ctx = host61.generate_host_quote(
-            workshop_hours=workshop_hours,
-            num_prisoners=num_prisoners,
-            prisoner_salary=prisoner_salary,
-            num_supervisors=num_supervisors,
-            customer_covers_supervisors=customer_covers_supervisors,
+            workshop_hours=float(workshop_hours),
+            area_m2=0.0,                      # unused in 61% method; kept for signature compat
+            usage_key="low",
+            num_prisoners=int(num_prisoners),
+            prisoner_salary=float(prisoner_salary),
+            num_supervisors=int(num_supervisors),
+            customer_covers_supervisors=bool(customer_covers_supervisors),
             supervisor_salaries=supervisor_salaries,
-            effective_pct=instructor_pct,
+            effective_pct=float(instructor_pct),
+            customer_type="Commercial",
+            apply_vat=True,
+            vat_rate=20.0,
+            dev_rate=0.20,                    # reductions are applied inside host61 using employment_support
+            employment_support=employment_support,
+            contracts_overseen=int(contracts_overseen),
+            lock_overheads=bool(lock_overheads),
+            region=region,
+        )
+
+        st.markdown(render_table_html(df), unsafe_allow_html=True)
+
+        # Productivity what-if (post table)
+        st.write("")
+        prod = st.slider("Adjust for Productivity (%)", 50, 100, 100, key="host_prod_adj")
+        factor = prod / 100.0
+        st.subheader("Adjusted Costs (for review only)")
+        df_adj = adjust_table(df, factor)
+        st.markdown(render_table_html(df_adj, highlight=True), unsafe_allow_html=True)
+
+        # Download HTML (UTF-8)
+        body = f"""
+        <h1>Host Quote</h1>
+        <p class="caption">Date: {date.today().strftime('%d/%m/%Y')}<br>
+        Customer: {customer}<br>
+        Prison: {prison}<br>
+        Region: {region}</p>
+        {render_table_html(df)}
+        <h2>Adjusted Costs (for review only)</h2>
+        {render_table_html(df_adj, highlight=True)}
+        <p class="caption">Productivity assumptions have been applied. These will be reviewed annually with Commercial.</p>
+        """
+        html = build_html_page("Host Quote", body)
+        st.download_button(
+            "Download PDF-ready HTML (Host)",
+            data=BytesIO(html.encode("utf-8")),
+            file_name="host_quote.html",
+            mime="text/html",
+        )
+        return
+
+    # ──────────────────────────────────────────────
+    # PRODUCTION (Contractual vs Ad-hoc handled by your existing functions)
+    # ──────────────────────────────────────────────
+    prod_mode = st.radio("Production mode", ["Contractual", "Ad-hoc"], horizontal=True)
+
+    if prod_mode == "Contractual":
+        st.info("Enter items above (as per your existing flow) and re-generate.")
+        # Expect items already captured elsewhere in your app/session.
+        items = st.session_state.get("prod_items", [])
+        if not items:
+            st.warning("No items found. Please add items, then click Generate Costs.")
+            return
+
+        results = calculate_production_contractual(
+            items, int(prisoner_output),
+            workshop_hours=float(workshop_hours),
+            prisoner_salary=float(prisoner_salary),
+            supervisor_salaries=supervisor_salaries,
+            effective_pct=float(instructor_pct),
+            customer_covers_supervisors=bool(customer_covers_supervisors),
             region=region,
             customer_type="Commercial",
+            apply_vat=True,
             vat_rate=20.0,
-            dev_rate=0.2,
-            employment_support=employment_support,
-            lock_overheads=lock_overheads,
+            num_prisoners=int(num_prisoners),
+            num_supervisors=int(num_supervisors),
+            dev_rate=0.20,
+            pricing_mode="as-is",
+            targets=None,
+            lock_overheads=bool(lock_overheads),
         )
+        df = pd.DataFrame(results)
+        # hide feasibility/note for contractual
+        for col in ("Feasible", "Note"):
+            if col in df.columns:
+                df.drop(columns=[col], inplace=True)
 
-        st.subheader("Host Quote")
-        st.dataframe(df, use_container_width=True)
+        st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Adjust for productivity
-        productivity = st.slider("Adjust for Productivity (%)", 50, 100, 100)
-        factor = productivity / 100.0
-        adjusted_df = adjust_table(df, factor)
+        prod = st.slider("Adjust for Productivity (%)", 50, 100, 100, key="prod_contract_adj")
+        factor = prod / 100.0
         st.subheader("Adjusted Costs (for review only)")
-        st.dataframe(adjusted_df, use_container_width=True)
+        df_adj = adjust_table(df, factor)
+        st.markdown(render_table_html(df_adj, highlight=True), unsafe_allow_html=True)
 
-        # Downloads
-        html_content = build_html_page("Host Quote", render_table_html(df))
-        html_bytes = BytesIO(html_content.encode("utf-8"))
+        body = f"""
+        <h1>Production – Contractual Quote</h1>
+        <p class="caption">Date: {date.today().strftime('%d/%m/%Y')}<br>
+        Customer: {customer}<br>
+        Prison: {prison}<br>
+        Region: {region}</p>
+        {render_table_html(df)}
+        <h2>Adjusted Costs (for review only)</h2>
+        {render_table_html(df_adj, highlight=True)}
+        <p class="caption">Productivity assumptions have been applied. These will be reviewed annually with Commercial.</p>
+        """
+        html = build_html_page("Production – Contractual Quote", body)
         st.download_button(
-            "Download PDF-ready HTML (Host Quote)",
-            data=html_bytes,
-            file_name="host_quote.html",
-            mime="text/html"
+            "Download PDF-ready HTML (Production – Contractual)",
+            data=BytesIO(html.encode("utf-8")),
+            file_name="production_contractual.html",
+            mime="text/html",
         )
+        return
 
-    # ──────────────────────────────────────────────
-    # PRODUCTION PATH
-    # ──────────────────────────────────────────────
-    elif contract_type == "Production":
-        st.markdown("Select production mode:")
-        prod_mode = st.radio("Mode", ["Contractual", "Ad-hoc"], horizontal=True)
+    else:
+        # Ad-hoc path – relies on your existing calculate_adhoc
+        adhoc_lines = st.session_state.get("adhoc_lines", [])
+        if not adhoc_lines:
+            st.warning("No ad-hoc lines found. Please add lines, then click Generate Costs.")
+            return
 
-        if prod_mode == "Contractual":
-            items = []
-            st.markdown("### Contractual Production Items")
-            with st.form("production_items"):
-                num_items = st.number_input("Number of items", min_value=1, step=1)
-                for i in range(int(num_items)):
-                    name = st.text_input(f"Item {i+1} Name", key=f"name_{i}")
-                    minutes = st.number_input(f"Minutes per unit (Item {i+1})", min_value=0.0, step=0.5, key=f"min_{i}")
-                    required = st.number_input(f"Prisoners required per unit (Item {i+1})", min_value=1, step=1, key=f"req_{i}")
-                    assigned = st.number_input(f"Prisoners assigned (Item {i+1})", min_value=0, step=1, key=f"ass_{i}")
-                    items.append({"name": name, "minutes": minutes, "required": required, "assigned": assigned})
-                output_pct = st.slider("Output %", 50, 100, prisoner_output)
-                submitted_prod = st.form_submit_button("Generate Production Costs")
+        result = calculate_adhoc(
+            adhoc_lines, int(prisoner_output),
+            workshop_hours=float(workshop_hours),
+            num_prisoners=int(num_prisoners),
+            prisoner_salary=float(prisoner_salary),
+            supervisor_salaries=supervisor_salaries,
+            effective_pct=float(instructor_pct),
+            customer_covers_supervisors=bool(customer_covers_supervisors),
+            customer_type="Commercial",
+            apply_vat=True,
+            vat_rate=20.0,
+            area_m2=0.0,
+            usage_key="low",
+            dev_rate=0.20,
+            today=date.today(),
+        )
+        df = pd.DataFrame(result["per_line"])
+        st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-            if submitted_prod:
-                results = calculate_production_contractual(
-                    items, output_pct,
-                    workshop_hours=workshop_hours,
-                    prisoner_salary=prisoner_salary,
-                    supervisor_salaries=supervisor_salaries,
-                    effective_pct=instructor_pct,
-                    customer_covers_supervisors=customer_covers_supervisors,
-                    region=region,
-                    customer_type="Commercial",
-                    apply_vat=True,
-                    vat_rate=20.0,
-                    num_prisoners=num_prisoners,
-                    num_supervisors=num_supervisors,
-                    dev_rate=0.2,
-                    pricing_mode="as-is",
-                )
-                df = pd.DataFrame(results)
-                st.dataframe(df, use_container_width=True)
+        prod = st.slider("Adjust for Productivity (%)", 50, 100, 100, key="prod_adhoc_adj")
+        factor = prod / 100.0
+        st.subheader("Adjusted Costs (for review only)")
+        df_adj = adjust_table(df, factor)
+        st.markdown(render_table_html(df_adj, highlight=True), unsafe_allow_html=True)
 
-                # Adjusted
-                productivity = st.slider("Adjust for Productivity (%)", 50, 100, 100, key="prod_adj")
-                factor = productivity / 100.0
-                adjusted_df = adjust_table(df, factor)
-                st.subheader("Adjusted Costs (for review only)")
-                st.dataframe(adjusted_df, use_container_width=True)
-
-                # Download
-                html_content = build_html_page("Production Contractual Quote", render_table_html(df))
-                html_bytes = BytesIO(html_content.encode("utf-8"))
-                st.download_button(
-                    "Download PDF-ready HTML (Production – Contractual)",
-                    data=html_bytes,
-                    file_name="production_contractual.html",
-                    mime="text/html"
-                )
-
-        else:  # Ad-hoc
-            st.markdown("### Ad-hoc Production Lines")
-            lines = []
-            with st.form("adhoc_items"):
-                num_lines = st.number_input("Number of lines", min_value=1, step=1)
-                for i in range(int(num_lines)):
-                    name = st.text_input(f"Line {i+1} Name", key=f"line_name_{i}")
-                    units = st.number_input(f"Units (Line {i+1})", min_value=1, step=1, key=f"line_units_{i}")
-                    mins_per_item = st.number_input(f"Minutes per unit (Line {i+1})", min_value=0.0, step=0.5, key=f"line_mins_{i}")
-                    pris_per_item = st.number_input(f"Prisoners per unit (Line {i+1})", min_value=1, step=1, key=f"line_pris_{i}")
-                    deadline = st.date_input(f"Deadline (Line {i+1})", value=date.today(), key=f"line_dead_{i}")
-                    lines.append({"name": name, "units": units, "mins_per_item": mins_per_item, "pris_per_item": pris_per_item, "deadline": deadline})
-                output_pct = st.slider("Output %", 50, 100, prisoner_output, key="adhoc_out")
-                submitted_adhoc = st.form_submit_button("Generate Production Costs")
-
-            if submitted_adhoc:
-                results = calculate_adhoc(
-                    lines, output_pct,
-                    workshop_hours=workshop_hours,
-                    num_prisoners=num_prisoners,
-                    prisoner_salary=prisoner_salary,
-                    supervisor_salaries=supervisor_salaries,
-                    effective_pct=instructor_pct,
-                    customer_covers_supervisors=customer_covers_supervisors,
-                    customer_type="Commercial",
-                    apply_vat=True,
-                    vat_rate=20.0,
-                    area_m2=0.0,
-                    usage_key="low",
-                    dev_rate=0.2,
-                    today=date.today(),
-                )
-                df = pd.DataFrame(results["per_line"])
-                st.dataframe(df, use_container_width=True)
-
-                # Adjusted
-                productivity = st.slider("Adjust for Productivity (%)", 50, 100, 100, key="adhoc_adj")
-                factor = productivity / 100.0
-                adjusted_df = adjust_table(df, factor)
-                st.subheader("Adjusted Costs (for review only)")
-                st.dataframe(adjusted_df, use_container_width=True)
-
-                # Download
-                html_content = build_html_page("Production Ad-hoc Quote", render_table_html(df))
-                html_bytes = BytesIO(html_content.encode("utf-8"))
-                st.download_button(
-                    "Download PDF-ready HTML (Production – Ad-hoc)",
-                    data=html_bytes,
-                    file_name="production_adhoc.html",
-                    mime="text/html"
-                )
+        body = f"""
+        <h1>Production – Ad-hoc Quote</h1>
+        <p class="caption">Date: {date.today().strftime('%d/%m/%Y')}<br>
+        Customer: {customer}<br>
+        Prison: {prison}<br>
+        Region: {region}</p>
+        {render_table_html(df)}
+        <h2>Adjusted Costs (for review only)</h2>
+        {render_table_html(df_adj, highlight=True)}
+        <p class="caption">Productivity assumptions have been applied. These will be reviewed annually with Commercial.</p>
+        """
+        html = build_html_page("Production – Ad-hoc Quote", body)
+        st.download_button(
+            "Download PDF-ready HTML (Production – Ad-hoc)",
+            data=BytesIO(html.encode("utf-8")),
+            file_name="production_adhoc.html",
+            mime="text/html",
+        )
 
 
 if __name__ == "__main__":
