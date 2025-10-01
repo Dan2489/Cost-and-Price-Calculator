@@ -12,7 +12,7 @@ from production61 import (
     labour_minutes_budget,
     calculate_production_contractual,
     calculate_adhoc,
-    build_adhoc_table,   # ⬅️ new import
+    build_adhoc_table,
 )
 import host61
 
@@ -125,7 +125,16 @@ if contract_type == "Host":
         df = st.session_state["host_df"]
         if customer_covers_supervisors:
             df = df[~df["Item"].str.contains("Instructor Salary", na=False)]
-        st.markdown(render_table_html(df), unsafe_allow_html=True)
+
+        # Highlight Development Charge reductions in red
+        if "Item" in df.columns:
+            df_display = df.copy()
+            df_display["Item"] = df_display["Item"].apply(
+                lambda x: f"<span style='color:red'>{x}</span>" if "Reduction" in str(x) else x
+            )
+            st.markdown(render_table_html(df_display), unsafe_allow_html=True)
+        else:
+            st.markdown(render_table_html(df), unsafe_allow_html=True)
 
         # Productivity slider
         st.markdown("---")
@@ -303,9 +312,6 @@ if contract_type == "Production":
                 else:
                     df, totals = build_adhoc_table(result)
                     st.session_state["prod_df"] = df
-                    st.markdown(render_table_html(df), unsafe_allow_html=True)
-                    st.markdown(f"**Total ex VAT:** {fmt_currency(totals['ex_vat'])}")
-                    st.markdown(f"**Total inc VAT:** {fmt_currency(totals['inc_vat'])}")
 
     if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
         df = st.session_state["prod_df"]
