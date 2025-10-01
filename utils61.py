@@ -16,7 +16,7 @@ def inject_govuk_css() -> None:
 
           /* GOV.UK button colours */
           .stButton > button {
-            background: #00703c !important;
+            background: #00703c !important;  /* GOV.UK green */
             color: #fff !important;
             border: 2px solid transparent !important;
             border-radius: 0 !important;
@@ -24,12 +24,12 @@ def inject_govuk_css() -> None:
           }
           .stButton > button:hover { filter: brightness(0.95); }
           .stButton > button:focus, .stButton > button:focus-visible {
-            outline: 3px solid #ffdd00 !important;
+            outline: 3px solid #ffdd00 !important; /* GOV.UK yellow */
             outline-offset: 0 !important;
             box-shadow: 0 0 0 1px #000 inset !important;
           }
 
-          /* Sidebar responsive */
+          /* Sidebar responsive: allow Streamlit to collapse on mobile */
           [data-testid="stSidebar"] {
             min-width: unset !important;
             max-width: unset !important;
@@ -92,9 +92,9 @@ def export_html(host_df=None, prod_df=None, title="Quote", extra_note=None) -> B
     b.seek(0)
     return b
 
-# -------------------------------------------------------------------
-# Sidebar controls
-# -------------------------------------------------------------------
+# -----------------------------
+# Sidebar controls (unchanged)
+# -----------------------------
 def sidebar_controls(default_output: int = 100):
     with st.sidebar:
         st.header("Controls")
@@ -114,3 +114,35 @@ def sidebar_controls(default_output: int = 100):
         )
 
     return lock_overheads, instructor_pct, prisoner_output
+
+
+# -----------------------------------------------
+# NEW: pretty currency formatting for display
+# -----------------------------------------------
+def render_table_html(df: pd.DataFrame) -> str:
+    """
+    Make a copy of df and render currency columns as £ with 2dp for display in the app.
+    Does not mutate the original DataFrame (exports remain numeric/clean).
+    """
+    if df is None or not isinstance(df, pd.DataFrame):
+        return ""
+
+    df2 = df.copy()
+
+    # Likely currency columns
+    currency_like = {
+        "Amount (£)",
+        "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
+        "Monthly Total ex VAT (£)", "Monthly Total inc VAT (£)", "Monthly Total (£)",
+        "Subtotal", "VAT (20%)", "Grand Total (£/month)"
+    }
+    # Also treat any column header containing '£' as currency
+    for col in df2.columns:
+        if col in currency_like or "£" in str(col):
+            try:
+                df2[col] = pd.to_numeric(df2[col], errors="coerce").map(lambda x: fmt_currency(x) if pd.notna(x) else "")
+            except Exception:
+                pass
+
+    # Render with borders (keeps left alignment)
+    return df2.to_html(index=False, border=1)
