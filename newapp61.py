@@ -10,7 +10,7 @@ from utils61 import (
     export_csv_bytes,
     export_html,
     sidebar_controls,
-    render_table_html,  # NEW: pretty currency formatting for display tables
+    render_table_html,
 )
 
 # -------------------------------------------------------------------
@@ -22,7 +22,7 @@ inject_govuk_css()
 st.title("Cost and Price Calculator")
 
 # -------------------------------------------------------------------
-# Sidebar controls (preserved)
+# Sidebar controls
 # -------------------------------------------------------------------
 lock_overheads, instructor_pct, prisoner_output = sidebar_controls(CFG.GLOBAL_OUTPUT_DEFAULT)
 
@@ -85,11 +85,6 @@ def validate_inputs():
 # Helpers
 # -------------------------------------------------------------------
 def _get_base_total(df: pd.DataFrame) -> float:
-    """
-    Safely find a total in either Host or Production tables.
-    Host: look for 'Grand Total' row in Amount (£)
-    Production: sum any monthly inc VAT total columns.
-    """
     try:
         if {"Item", "Amount (£)"}.issubset(df.columns):
             mask = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False)
@@ -133,7 +128,7 @@ if contract_type == "Host":
         ctx = st.session_state["host_ctx"]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Productivity slider (UI-only adjust)
+        # Productivity slider
         st.markdown("---")
         prod_host = st.slider(
             "Adjust for Productivity (%)",
@@ -166,14 +161,39 @@ if contract_type == "Host":
 # PRODUCTION MODE
 # -------------------------------------------------------------------
 if contract_type == "Production":
-    # IMPORTANT: No "Generate" button here to avoid the crash & match your baseline expectation.
-    # Only render if a production results table already exists in session_state.
+    st.subheader("Production Settings")
+
+    prod_type = st.radio("Do you want contractual or ad-hoc costs?",
+                         ["Contractual", "Ad-hoc"], index=0)
+
+    if st.button("Generate Production Costs"):
+        errs = validate_inputs()
+        if errs:
+            st.error("Fix errors:\n- " + "\n- ".join(errs))
+        else:
+            df, ctx = production61.generate_production_quote(
+                workshop_hours=workshop_hours,
+                num_prisoners=num_prisoners,
+                prisoner_salary=prisoner_salary,
+                num_supervisors=num_supervisors,
+                supervisor_salaries=supervisor_salaries,
+                region=region,
+                contracts=contracts,
+                employment_support=employment_support,
+                instructor_allocation=instructor_pct,
+                lock_overheads=lock_overheads,
+                prisoner_output=prisoner_output,
+                prod_type=prod_type,
+            )
+            st.session_state["prod_df"] = df
+            st.session_state["prod_ctx"] = ctx
+
     if "prod_df" in st.session_state:
         df = st.session_state["prod_df"]
-        ctx = st.session_state.get("prod_ctx", {})
+        ctx = st.session_state["prod_ctx"]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Productivity slider (UI-only adjust)
+        # Productivity slider
         st.markdown("---")
         prod_prod = st.slider(
             "Adjust for Productivity (%)",
@@ -201,6 +221,3 @@ if contract_type == "Production":
             st.download_button("Download PDF-ready HTML (Production)",
                                data=export_html(None, df, title="Production Quote", extra_note=extra_note),
                                file_name="production_quote.html", mime="text/html")
-    else:
-        # Nothing to calculate/display yet; this mirrors your original UX (no extra button here).
-        st.info("Enter production items and settings to see costs.")
