@@ -74,27 +74,19 @@ def validate_inputs():
 
 
 # -------------------------------------------------------------------
-# Helpers: extract a safe total from DF (fallback to ctx)
+# Helpers: extract base total
 # -------------------------------------------------------------------
-def _safe_total_from_df(df: pd.DataFrame, ctx: dict | None = None) -> float:
+def _get_base_total(df: pd.DataFrame) -> float:
     try:
-        # Host-style table: look for a "Grand Total" row
         if {"Item", "Amount (£)"}.issubset(df.columns):
             mask = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False)
             if mask.any():
-                return float(pd.to_numeric(df.loc[mask, "Amount (£)"], errors="coerce").dropna().iloc[-1])
-            # else sum the Amount column (last resort)
-            return float(pd.to_numeric(df["Amount (£)"], errors="coerce").fillna(0).sum())
-
-        # Production-style table: sum monthly inc VAT column if present
-        prod_cols = ["Monthly Total inc VAT (£)", "Monthly Total (inc VAT £)"]
-        for c in prod_cols:
-            if c in df.columns:
-                return float(pd.to_numeric(df[c], errors="coerce").fillna(0).sum())
-
-        # Fallback to ctx if provided
-        if ctx and "grand_total" in ctx:
-            return float(ctx["grand_total"])
+                val = pd.to_numeric(df.loc[mask, "Amount (£)"], errors="coerce").dropna()
+                if not val.empty:
+                    return float(val.iloc[-1])
+        for col in ["Monthly Total inc VAT (£)", "Monthly Total (inc VAT £)", "Monthly Total (£)"]:
+            if col in df.columns:
+                return float(pd.to_numeric(df[col], errors="coerce").fillna(0).sum())
     except Exception:
         pass
     return 0.0
@@ -124,25 +116,25 @@ if contract_type == "Host":
 
             # Productivity slider
             st.markdown("---")
-            productivity_adj = st.slider(
+            prod_host = st.slider(
                 "Adjust for Productivity (%)",
                 min_value=50, max_value=100, value=100, step=5,
-                help="Scale final totals by expected productivity (e.g. 90% = reduce costs by 10%)"
+                key="prod_adj_host",
+                help="Scale the displayed total by expected productivity (e.g. 90% = reduce by 10%)."
             )
-
-            base_total = _safe_total_from_df(df, ctx)
-            adjusted_total = base_total * (productivity_adj / 100.0)
+            base_total = _get_base_total(df)
+            adjusted_total = base_total * (prod_host / 100.0)
             st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
 
-            # Export
             extra_note = None
-            if productivity_adj < 100:
+            if prod_host < 100:
                 extra_note = (
                     f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
                     "<p><em>Productivity assumptions have been applied. "
                     "These will be reviewed annually with Commercial.</em></p>"
                 )
 
+            # Downloads
             c1, c2 = st.columns(2)
             with c1:
                 st.download_button("Download CSV (Host)", data=export_csv_bytes(df),
@@ -177,25 +169,25 @@ if contract_type == "Production":
 
             # Productivity slider
             st.markdown("---")
-            productivity_adj = st.slider(
+            prod_prod = st.slider(
                 "Adjust for Productivity (%)",
                 min_value=50, max_value=100, value=100, step=5,
-                help="Scale final totals by expected productivity (e.g. 90% = reduce costs by 10%)"
+                key="prod_adj_prod",
+                help="Scale the displayed total by expected productivity (e.g. 90% = reduce by 10%)."
             )
-
-            base_total = _safe_total_from_df(df, ctx)
-            adjusted_total = base_total * (productivity_adj / 100.0)
+            base_total = _get_base_total(df)
+            adjusted_total = base_total * (prod_prod / 100.0)
             st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
 
-            # Export
             extra_note = None
-            if productivity_adj < 100:
+            if prod_prod < 100:
                 extra_note = (
                     f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
                     "<p><em>Productivity assumptions have been applied. "
                     "These will be reviewed annually with Commercial.</em></p>"
                 )
 
+            # Downloads
             c1, c2 = st.columns(2)
             with c1:
                 st.download_button("Download CSV (Production)", data=export_csv_bytes(df),
