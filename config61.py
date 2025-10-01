@@ -2,10 +2,8 @@
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
-class AppConfig:
-    days_per_month: float = 365.0 / 12.0   # ~30.42
-    full_utilisation_week: float = 37.5    # reference week
-    default_admin_monthly: float = 150.0   # unused, kept for compatibility
-    global_output_default: int = 100       # default slider value (%)
+class AppConfig61:
+    # Default prisoner labour output (%) for Production when the user doesn’t touch the slider
+    global_output_default: int = 100
 
-CFG = AppConfig()
+CFG = AppConfig61()
