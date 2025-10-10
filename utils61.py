@@ -85,13 +85,12 @@ def export_csv_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 def _render_preamble(meta: dict | None) -> str:
-    from datetime import datetime
     if not meta:
         return ""
     today = meta.get("today")
-    if hasattr(today, "strftime"):
+    try:
         dt = today.strftime("%-d %B %Y")
-    else:
+    except Exception:
         dt = str(today)
     customer = meta.get("customer", "")
     prison = meta.get("prison", "")
@@ -123,7 +122,6 @@ def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
         table.custom.highlight { background-color: #fff8dc; }
     </style>
     """
-    # Ensure £ renders correctly and avoid stray characters
     html = f"<html><head><meta charset='utf-8' />{styles}</head><body>"
     html += f"<h1>{title}</h1>"
     html += _render_preamble(meta)
@@ -134,16 +132,21 @@ def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
     if df_prod is not None:
         html += "<h3>Production Items</h3>"
         html += render_table_html(df_prod)
-    if adjusted_df is not None:
-        html += "<h3>Adjusted Costs (for review only)</h3>"
-        html += render_table_html(adjusted_df, highlight=True)
+
     if comparison:
         if comparison.get("Host") is not None:
             html += "<h3>Instructor allocation comparison (Host)</h3>"
             html += render_table_html(comparison["Host"])
-        if comparison.get("Production") is not None:
-            html += "<h3>Instructor allocation comparison (Production)</h3>"
-            html += render_table_html(comparison["Production"])
+        if comparison.get("Production_totals") is not None:
+            html += "<h3>Instructor allocation comparison (Production) — totals (ex VAT)</h3>"
+            html += render_table_html(comparison["Production_totals"])
+        if comparison.get("Production_units") is not None:
+            html += "<h3>Unit prices (ex VAT) and uplift vs current</h3>"
+            html += render_table_html(comparison["Production_units"])
+
+    if adjusted_df is not None:
+        html += "<h3>Adjusted Costs (for review only)</h3>"
+        html += render_table_html(adjusted_df, highlight=True)
 
     if extra_note:
         html += f"<div style='margin-top:1em'>{extra_note}</div>"
@@ -168,7 +171,7 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
 # Allocation comparison helpers
 # -------------------------------
 def recompute_host_for_allocation(base_inputs: dict, allocation_pct: int):
-    """Re-run the host quote at a different instructor allocation % and return (df, total)."""
+    """Re-run the host quote at a different instructor allocation % and return (df, subtotal_ex_vat)."""
     import host61
     df, _ctx = host61.generate_host_quote(
         workshop_hours=base_inputs["workshop_hours"],
@@ -183,33 +186,79 @@ def recompute_host_for_allocation(base_inputs: dict, allocation_pct: int):
         instructor_allocation=allocation_pct,
         lock_overheads=base_inputs["lock_overheads"],
     )
-    total = 0.0
+    subtotal = 0.0
     try:
         if {"Item", "Amount (£)"}.issubset(df.columns):
-            mask = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False)
-            if mask.any():
-                val = pd.to_numeric(df.loc[mask, "Amount (£)"], errors="coerce").dropna()
+            mask_sub = df["Item"].astype(str).str.contains("^Subtotal$", case=False, na=False)
+            if mask_sub.any():
+                val = pd.to_numeric(df.loc[mask_sub, "Amount (£)"], errors="coerce").dropna()
                 if not val.empty:
-                    total = float(val.iloc[-1])
+                    subtotal = float(val.iloc[-1])
+            else:
+                # Fallback: sum all rows except VAT / Grand Total
+                mask_exclude = df["Item"].astype(str).str.contains("VAT|Grand Total", case=False, na=False)
+                vals = pd.to_numeric(df.loc[~mask_exclude, "Amount (£)"], errors="coerce").fillna(0)
+                subtotal = float(vals.sum())
     except Exception:
         pass
-    return df, total
+    return df, subtotal
 
-def recompute_prod_for_allocation(current_df: pd.DataFrame, new_allocation_pct: int, current_allocation_pct: int) -> float:
+def build_prod_comparison(df: pd.DataFrame, current_allocation_pct: int, scenarios: list[tuple[str, int]]):
     """
-    Scale the shown Production table's totals by the ratio of new/current allocation.
-    This keeps Dev charge as-is (visual comparison only).
+    Build two comparison tables from an already-rendered Production DF:
+      1) Totals table: Monthly Total ex VAT for each scenario.
+      2) Per-item unit price table (ex VAT) and uplift vs optional 'Current Price ex VAT (£)'.
+    Scaling is proportional to allocation % (visual comparison, Dev charge unchanged elsewhere).
     """
-    try:
-        ratio = (float(new_allocation_pct) / max(1e-9, float(current_allocation_pct)))
-        total_col_candidates = [
-            "Monthly Total inc VAT (£)", "Monthly Total (inc VAT £)",
-            "Monthly Total (£)", "Grand Total (£)"
-        ]
-        for col in total_col_candidates:
-            if col in current_df.columns:
-                vals = pd.to_numeric(current_df[col].astype(str).str.replace("£", "").str.replace(",", ""), errors="coerce").fillna(0)
-                return float(vals.sum() * ratio)
-    except Exception:
-        pass
-    return 0.0
+    # Identify columns
+    if df is None or df.empty:
+        return (pd.DataFrame(columns=["Scenario", "Monthly Grand Total (ex VAT)"]), pd.DataFrame())
+    col_total = None
+    for c in ["Monthly Total ex VAT (£)", "Monthly Total (ex VAT £)", "Monthly Total (£)"]:
+        if c in df.columns:
+            col_total = c
+            break
+    col_unit = "Unit Price ex VAT (£)" if "Unit Price ex VAT (£)" in df.columns else None
+    col_item = "Item" if "Item" in df.columns else None
+    col_curr = "Current Price ex VAT (£)" if "Current Price ex VAT (£)" in df.columns else None
+
+    # Base totals ex VAT
+    def _parse_money_series(series):
+        return pd.to_numeric(series.astype(str).str.replace("£", "").str.replace(",", ""), errors="coerce").fillna(0)
+
+    totals_current = _parse_money_series(df[col_total]) if col_total else pd.Series([0.0])
+    total_ex_current = float(totals_current.sum())
+
+    # Build totals table
+    totals_rows = []
+    for label, pct in scenarios:
+        ratio = (float(pct) / max(1e-9, float(current_allocation_pct)))
+        totals_rows.append([f"{label} ({pct}%)", fmt_currency(total_ex_current * ratio)])
+    totals_df = pd.DataFrame(totals_rows, columns=["Scenario", "Monthly Grand Total (ex VAT)"])
+
+    # Build per-item unit price comparison (if we have unit price)
+    units_df = pd.DataFrame()
+    if col_unit and col_item:
+        unit_prices = _parse_money_series(df[col_unit])
+        items = df[col_item].astype(str).tolist()
+        data = {"Item": items}
+        for label, pct in scenarios:
+            ratio = (float(pct) / max(1e-9, float(current_allocation_pct)))
+            data[f"Unit Price ex VAT — {label}"] = [fmt_currency(v * ratio) for v in unit_prices]
+        # Uplift vs current price (if provided)
+        if col_curr in df.columns:
+            curr_vals = _parse_money_series(df[col_curr])
+            # Use the first scenario as the 'model' reference for uplift (Current)
+            model_vals = unit_prices * (float(scenarios[0][1]) / max(1e-9, float(current_allocation_pct)))
+            uplift = []
+            for c, m in zip(curr_vals, model_vals):
+                if c and c > 0:
+                    uplift.append(round(((m - c) / c) * 100.0, 1))
+                else:
+                    uplift.append("")
+            data["Current Price ex VAT (£)"] = [("" if (pd.isna(v) or v <= 0) else fmt_currency(v)) for v in curr_vals]
+            data["Uplift vs Current (%) — Current"] = uplift
+
+        units_df = pd.DataFrame(data)
+
+    return totals_df, units_df
