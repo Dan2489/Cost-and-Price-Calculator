@@ -13,7 +13,6 @@ def inject_govuk_css():
             --govuk-green: #00703c;
             --govuk-yellow: #ffdd00;
           }
-
           /* Buttons */
           .stButton > button {
             background: var(--govuk-green) !important;
@@ -27,7 +26,6 @@ def inject_govuk_css():
             outline: 3px solid var(--govuk-yellow) !important;
             box-shadow: 0 0 0 1px #000 inset !important;
           }
-
           /* Tables */
           table.custom { width: 100%; border-collapse: collapse; margin: 12px 0; }
           table.custom th, table.custom td {
@@ -73,7 +71,6 @@ def _fmt_cell(x):
     if s == "":
         return ""
     try:
-        # Already-currency strings
         if "£" in s:
             s_num = s.replace("£", "").replace(",", "")
             return fmt_currency(float(s_num))
@@ -95,6 +92,7 @@ def export_html(
     title: str,
     extra_note: str | None = None,
     adjusted_df: pd.DataFrame | None = None,
+    comparison_df: pd.DataFrame | None = None
 ) -> str:
     styles = """
     <style>
@@ -105,27 +103,28 @@ def export_html(
         table.custom th { background: #f3f2f1; font-weight: bold; }
         table.custom.highlight { background-color: #fff8dc; }
         .neg { color: #d4351c; }
-        .meta { margin: 0.25rem 0 0.75rem 0; }
-        .preamble { margin: 0.75rem 0; }
     </style>
     """
-    # Ensure UTF-8 so £ renders correctly and no odd leading characters
     html = f"<html><head><meta charset='utf-8' />{styles}</head><body>"
     html += f"<h1>{title}</h1>"
-
-    # Optional preamble/caption block can be injected by caller into extra_note if desired
+    html += ("<p>We are pleased to set out below the terms of our Quotation for the Goods and/or Services "
+             "you are currently seeking. We confirm that this Quotation and any subsequent contract entered "
+             "into as a result is, and will be, subject exclusively to our Standard Conditions of Sale of Goods "
+             "and/or Services a copy of which is available on request. Please note that all prices are exclusive "
+             "of VAT and carriage costs at time of order of which the customer shall be additionally liable to pay.</p>")
 
     if df_host is not None:
         html += render_table_html(df_host)
     if df_prod is not None:
         html += render_table_html(df_prod)
+    if comparison_df is not None:
+        html += "<h3>Instructor Cost Comparison (ex VAT)</h3>"
+        html += render_table_html(comparison_df)
     if adjusted_df is not None:
         html += "<h3>Adjusted Costs (for review only)</h3>"
         html += render_table_html(adjusted_df, highlight=True)
-
     if extra_note:
         html += f"<div style='margin-top:1em'>{extra_note}</div>"
-
     html += "</body></html>"
     return html
 
@@ -135,38 +134,44 @@ def export_html(
 def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
     if df is None or df.empty:
         return "<p><em>No data</em></p>"
-
     df_fmt = df.copy()
-
-    # Currency-like columns get formatted; rows with "Reduction" in Item get red in "Item" column
     if "Item" in df_fmt.columns:
         df_fmt["Item"] = df_fmt["Item"].apply(
             lambda x: f"<span style='color:red'>{x}</span>" if isinstance(x, str) and "Reduction" in x else x
         )
-
     for col in df_fmt.columns:
         if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand"]):
             df_fmt[col] = df_fmt[col].apply(_fmt_cell)
-
     cls = "custom highlight" if highlight else "custom"
     return df_fmt.to_html(index=False, classes=cls, border=0, justify="left", escape=False)
 
 # -------------------------------
-# Adjust table for productivity
+# Comparison Table Renderer
 # -------------------------------
-def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
-    """Scale numeric/currency values by factor and return formatted copy."""
-    if df is None or df.empty:
-        return df
+def render_comparison_table(df: pd.DataFrame, title: str = "Instructor Cost Comparison"):
+    import streamlit as st
+    st.markdown(f"### {title}")
+    st.markdown(render_table_html(df, highlight=True), unsafe_allow_html=True)
 
-    df_adj = df.copy()
-    for col in df_adj.columns:
-        if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand"]):
-            def try_scale(val):
-                try:
-                    v = float(str(val).replace("£", "").replace(",", ""))
-                    return fmt_currency(v * factor)
-                except Exception:
-                    return val
-            df_adj[col] = df_adj[col].map(try_scale)
-    return df_adj
+# -------------------------------
+# Power BI CSV Export Builder
+# -------------------------------
+def build_powerbi_export(meta: dict, df_main: pd.DataFrame, df_comp: pd.DataFrame | None = None) -> bytes:
+    """Flatten quote + comparison data into single CSV for Power BI."""
+    rows = []
+    base_meta = {k: v for k, v in meta.items()}
+    # Main
+    if isinstance(df_main, pd.DataFrame) and not df_main.empty:
+        for _, r in df_main.iterrows():
+            row = {**base_meta}
+            for c in df_main.columns:
+                row[c] = r[c]
+            rows.append(row)
+    # Comparison
+    if isinstance(df_comp, pd.DataFrame) and not df_comp.empty:
+        for _, r in df_comp.iterrows():
+            row = {**base_meta}
+            for c in df_comp.columns:
+                row[f"Comparison_{c}"] = r[c]
+            rows.append(row)
+    return export_csv_bytes(pd.DataFrame(rows))
