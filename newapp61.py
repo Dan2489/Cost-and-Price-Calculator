@@ -155,23 +155,48 @@ if contract_type == "Production":
         for i in range(num_items):
             with st.expander(f"Item {i+1} details", expanded=(i == 0)):
                 name = st.text_input(f"Item {i+1} Name", key=f"name_{i}")
-                required = st.number_input(f"Prisoners required to make 1 item ({name or 'Item'})", min_value=1, value=1)
-                mins_or_secs = st.radio(f"Input unit for production time ({name or 'Item'})", ["Minutes", "Seconds"], key=f"unit_{i}", horizontal=True)
-                time_value = st.number_input(f"How long to make 1 item ({name or 'Item'}) ({mins_or_secs.lower()})",
-                                             min_value=0.1, format="%.2f", key=f"mins_{i}")
+                disp = name or f"Item {i+1}"
+
+                required = st.number_input(
+                    f"Prisoners required to make 1 item ({disp})",
+                    min_value=1, value=1, key=f"req_{i}"
+                )
+
+                mins_or_secs = st.radio(
+                    f"Input unit for production time ({disp})",
+                    ["Minutes", "Seconds"], key=f"unit_{i}", horizontal=True
+                )
+
+                time_value = st.number_input(
+                    f"How long to make 1 item ({disp}) ({mins_or_secs.lower()})",
+                    min_value=0.01, format="%.2f", key=f"time_{i}"
+                )
                 minutes_per = time_value / 60.0 if mins_or_secs == "Seconds" else time_value
 
-                assigned = st.number_input(f"How many prisoners work solely on this item ({name or 'Item'})",
-                                           min_value=0, max_value=num_prisoners, value=1, step=1, key=f"assigned_{i}")
+                assigned = st.number_input(
+                    f"How many prisoners work solely on this item ({disp})",
+                    min_value=0, max_value=num_prisoners, value=1, step=1, key=f"assigned_{i}"
+                )
 
-                current_price = st.number_input(f"Current price per unit (£) ({name or 'Item'})", min_value=0.0, format="%.2f", key=f"curr_{i}")
+                current_price = st.number_input(
+                    f"Current price per unit (£) ({disp})",
+                    min_value=0.0, format="%.2f", key=f"curr_{i}"
+                )
+
+                target_units = None
+                if pricing_key == "target":
+                    target_units = st.number_input(
+                        f"Target units per week ({disp})",
+                        min_value=0, value=0, step=1, key=f"target_{i}"
+                    )
 
                 items.append({
-                    "name": name or f"Item {i+1}",
+                    "name": disp,
                     "required": required,
                     "minutes": minutes_per,
                     "assigned": assigned,
                     "current_price": current_price,
+                    "target": target_units
                 })
 
         if st.button("Generate Production Costs"):
@@ -214,13 +239,13 @@ if contract_type == "Production":
         for i in range(num_lines):
             with st.expander(f"Product line {i+1}", expanded=(i == 0)):
                 item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
-                units_requested = st.number_input("Units requested", min_value=1, value=100)
-                deadline = st.date_input("Deadline", value=date.today())
-                pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1)
+                units_requested = st.number_input("Units requested", min_value=1, value=100, key=f"adhoc_units_{i}")
+                deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
+                pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, key=f"adhoc_pris_{i}")
                 mins_or_secs = st.radio("Input unit for production time", ["Minutes", "Seconds"], key=f"adhoc_unit_{i}", horizontal=True)
-                time_value = st.number_input("Time to make one item", min_value=0.1, format="%.2f")
+                time_value = st.number_input("Time to make one item", min_value=0.01, format="%.2f", key=f"adhoc_time_{i}")
                 minutes_per_item = time_value / 60.0 if mins_or_secs == "Seconds" else time_value
-                current_price = st.number_input("Current price per unit (£)", min_value=0.0, format="%.2f")
+                current_price = st.number_input("Current price per unit (£)", min_value=0.0, format="%.2f", key=f"adhoc_curr_{i}")
                 lines.append({
                     "name": item_name or f"Item {i+1}",
                     "units": units_requested,
