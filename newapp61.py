@@ -6,7 +6,8 @@ from config61 import CFG
 from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from utils61 import (
     inject_govuk_css, sidebar_controls, fmt_currency,
-    export_csv_bytes, export_html, render_table_html, adjust_table
+    export_csv_bytes, export_html, render_table_html,
+    recompute_host_for_allocation, recompute_prod_for_allocation
 )
 from production61 import (
     labour_minutes_budget,
@@ -24,7 +25,7 @@ inject_govuk_css()
 st.title("Cost and Price Calculator")
 
 # -------------------------------
-# Sidebar
+# Sidebar (no productivity slider anymore)
 # -------------------------------
 lock_overheads, instructor_pct, prisoner_output = sidebar_controls(CFG.GLOBAL_OUTPUT_DEFAULT)
 
@@ -97,10 +98,27 @@ def _get_base_total(df: pd.DataFrame) -> float:
         pass
     return 0.0
 
+def _recommended_allocation(workshop_hours: float, contracts: int) -> int:
+    try:
+        base = (float(workshop_hours) / 37.5) * (1.0 / max(1, int(contracts))) * 100.0
+        return max(0, min(100, int(round(base))))
+    except Exception:
+        return 100
+
+def _append_recommendation_blurb():
+    rec = _recommended_allocation(workshop_hours, contracts)
+    st.caption(
+        f"**Instructor allocation recommendation:** {rec}% "
+        f"(based on {workshop_hours:.2f} hours/week and {contracts} contract{'s' if contracts!=1 else ''}). "
+        f"Use the sidebar to change."
+    )
+
 # -------------------------------
 # HOST
 # -------------------------------
 if contract_type == "Host":
+    _append_recommendation_blurb()
+
     if st.button("Generate Host Costs"):
         errs = validate_inputs()
         if errs:
@@ -123,8 +141,8 @@ if contract_type == "Host":
 
     if "host_df" in st.session_state:
         df = st.session_state["host_df"]
-        if customer_covers_supervisors:
-            df = df[~df["Item"].str.contains("Instructor Salary", na=False)]
+        if customer_covers_supervisors and "Item" in df.columns:
+            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
 
         # Highlight Development Charge reductions in red
         if "Item" in df.columns:
@@ -136,44 +154,73 @@ if contract_type == "Host":
         else:
             st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Productivity slider
-        st.markdown("---")
-        prod_host = st.slider("Adjust for Productivity (%)", 50, 100, 100, step=5, key="prod_adj_host")
-
-        base_total = _get_base_total(df)
-        adjusted_total = base_total * (prod_host / 100.0)
-        st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
-
-        if prod_host < 100:
-            df_adj = adjust_table(df, prod_host / 100.0)
-            st.markdown("### Adjusted Costs (for review only)")
-            st.markdown(render_table_html(df_adj, highlight=True), unsafe_allow_html=True)
-            st.caption("_Productivity assumptions applied — reviewed annually with Commercial._")
-
-            extra_note = (
-                f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
-                "<p><em>Productivity assumptions have been applied. These will be reviewed annually with Commercial.</em></p>"
+        # ---- Allocation comparison block (Host) ----
+        st.markdown("### Instructor allocation comparison (Host)")
+        rec_pct = _recommended_allocation(workshop_hours, contracts)
+        comp_rows = []
+        for label, pct in [
+            (f"Current ({instructor_pct}%)", instructor_pct),
+            (f"Recommended ({rec_pct}%)", rec_pct),
+            ("50%", 50),
+            ("25%", 25),
+        ]:
+            df_cmp, total_cmp = recompute_host_for_allocation(
+                base_inputs=dict(
+                    workshop_hours=workshop_hours,
+                    num_prisoners=num_prisoners,
+                    prisoner_salary=prisoner_salary,
+                    num_supervisors=num_supervisors,
+                    customer_covers_supervisors=customer_covers_supervisors,
+                    supervisor_salaries=supervisor_salaries,
+                    region=region,
+                    contracts=contracts,
+                    employment_support=employment_support,
+                    lock_overheads=lock_overheads,
+                ),
+                allocation_pct=pct
             )
-        else:
-            df_adj, extra_note = None, None
+            comp_rows.append([label, fmt_currency(total_cmp)])
+        comp_df = pd.DataFrame(comp_rows, columns=["Instructor Allocation", "Monthly Grand Total (inc VAT)"])
+        st.markdown(render_table_html(comp_df), unsafe_allow_html=True)
 
+        # Downloads
         c1, c2 = st.columns(2)
-        with c1: 
+        with c1:
             st.download_button("Download CSV (Host)", data=export_csv_bytes(df), file_name="host_quote.csv", mime="text/csv")
-        with c2: 
+        with c2:
             st.download_button(
                 "Download PDF-ready HTML (Host)",
-                data=export_html(df, None, title="Host Quote", extra_note=extra_note, adjusted_df=df_adj),
-                file_name="host_quote.html", mime="text/html"
+                data=export_html(
+                    df_host=df,
+                    df_prod=None,
+                    title="Host Quote",
+                    extra_note=None,
+                    adjusted_df=None,
+                    meta=dict(
+                        customer=customer_name,
+                        prison=prison_choice,
+                        region=region,
+                        today=date.today()
+                    ),
+                    comparison={
+                        "Host": comp_df,
+                        "Production": None
+                    }
+                ),
+                file_name="host_quote.html",
+                mime="text/html"
             )
 
 # -------------------------------
 # PRODUCTION
 # -------------------------------
 if contract_type == "Production":
+    _append_recommendation_blurb()
+
     st.markdown("---")
     st.subheader("Production settings")
 
+    # Labour minutes info
     output_scale = float(prisoner_output) / 100.0
     budget_minutes_raw = labour_minutes_budget(int(num_prisoners), float(workshop_hours))
     budget_minutes_planned = budget_minutes_raw * output_scale
@@ -192,8 +239,15 @@ if contract_type == "Production":
             with st.expander(f"Item {i+1} details", expanded=(i == 0)):
                 name = st.text_input(f"Item {i+1} Name", key=f"name_{i}")
                 disp = (name.strip() or f"Item {i+1}") if isinstance(name, str) else f"Item {i+1}"
-                required = st.number_input(f"Prisoners required to make 1 item ({disp})", min_value=1, value=1, step=1, key=f"req_{i}")
-                minutes_per = st.number_input(f"How many minutes to make 1 item ({disp})", min_value=1.0, value=10.0, format="%.2f", key=f"mins_{i}")
+                required = st.number_input(
+                    f"Prisoners required to make 1 item ({disp})",
+                    min_value=1, value=1, step=1, key=f"req_{i}"
+                )
+                minutes_per = st.number_input(
+                    f"How many minutes to make 1 item ({disp})",
+                    min_value=0.0, value=10.0, format="%.2f", key=f"mins_{i}",
+                    help="Enter minutes as decimals (e.g., 0.5 = 30 seconds)."
+                )
 
                 total_assigned_before = sum(int(st.session_state.get(f"assigned_{j}", 0)) for j in range(i))
                 remaining = max(0, int(num_prisoners) - total_assigned_before)
@@ -255,9 +309,10 @@ if contract_type == "Production":
                         display_cols += ["Feasible", "Note"]
 
                     prod_df = pd.DataFrame([{
-                        k: (None if r.get(k) is None else (round(float(r.get(k)), 2) if isinstance(r.get(k), (int, float)) else r.get(k)))
+                        k: (None if results[idx].get(k) is None else
+                            (round(float(results[idx].get(k)), 2) if isinstance(results[idx].get(k), (int, float)) else results[idx].get(k)))
                         for k in display_cols
-                    } for r in results])
+                    } for idx in range(len(results))])
 
                     st.session_state["prod_df"] = prod_df
 
@@ -272,7 +327,10 @@ if contract_type == "Production":
                 with c3: deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
                 c4, c5 = st.columns([1, 1])
                 with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
-                with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=1.0, value=10.0, format="%.2f", key=f"adhoc_mins_{i}")
+                with c5: minutes_per_item = st.number_input(
+                    "Minutes to make one", min_value=0.0, value=10.0, format="%.2f", key=f"adhoc_mins_{i}",
+                    help="Enter minutes as decimals (e.g., 0.5 = 30 seconds)."
+                )
                 lines.append({
                     "name": (item_name.strip() or f"Item {i+1}") if isinstance(item_name, str) else f"Item {i+1}",
                     "units": int(units_requested),
@@ -287,7 +345,7 @@ if contract_type == "Production":
             for i, ln in enumerate(lines):
                 if ln["units"] <= 0: errs.append(f"Line {i+1}: Units requested must be > 0")
                 if ln["pris_per_item"] <= 0: errs.append(f"Line {i+1}: Prisoners to make one must be > 0")
-                if ln["mins_per_item"] <= 0: errs.append(f"Line {i+1}: Minutes to make one must be > 0")
+                if ln["mins_per_item"] < 0: errs.append(f"Line {i+1}: Minutes to make one must be ≥ 0")
             if errs:
                 st.error("Fix errors:\n- " + "\n- ".join(errs))
             else:
@@ -319,27 +377,23 @@ if contract_type == "Production":
             df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Productivity slider
-        st.markdown("---")
-        prod_prod = st.slider("Adjust for Productivity (%)", 50, 100, 100, step=5, key="prod_adj_prod")
+        # ---- Allocation comparison block (Production) ----
+        st.markdown("### Instructor allocation comparison (Production)")
+        rec_pct = _recommended_allocation(workshop_hours, contracts)
+        comp_rows = []
+        for label, pct in [
+            (f"Current ({instructor_pct}%)", instructor_pct),
+            (f"Recommended ({rec_pct}%)", rec_pct),
+            ("50%", 50),
+            ("25%", 25),
+        ]:
+            # recompute on the fly using displayed df as a proxy for total
+            total_cmp = recompute_prod_for_allocation(df, pct, instructor_pct)  # scales by ratio of pct/current
+            comp_rows.append([label, fmt_currency(total_cmp)])
+        comp_df = pd.DataFrame(comp_rows, columns=["Instructor Allocation", "Monthly Grand Total (inc VAT)"])
+        st.markdown(render_table_html(comp_df), unsafe_allow_html=True)
 
-        base_total = _get_base_total(df)
-        adjusted_total = base_total * (prod_prod / 100.0)
-        st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
-
-        if prod_prod < 100:
-            df_adj = adjust_table(df, prod_prod / 100.0)
-            st.markdown("### Adjusted Costs (for review only)")
-            st.markdown(render_table_html(df_adj, highlight=True), unsafe_allow_html=True)
-            st.caption("_Productivity assumptions applied — reviewed annually with Commercial._")
-
-            extra_note = (
-                f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
-                "<p><em>Productivity assumptions have been applied. These will be reviewed annually with Commercial.</em></p>"
-            )
-        else:
-            df_adj, extra_note = None, None
-
+        # Downloads
         c1, c2 = st.columns(2)
         with c1:
             st.download_button(
@@ -351,7 +405,23 @@ if contract_type == "Production":
         with c2:
             st.download_button(
                 "Download PDF-ready HTML (Production)",
-                data=export_html(None, df, title="Production Quote", extra_note=extra_note, adjusted_df=df_adj),
+                data=export_html(
+                    df_host=None,
+                    df_prod=df,
+                    title="Production Quote",
+                    extra_note=None,
+                    adjusted_df=None,
+                    meta=dict(
+                        customer=customer_name,
+                        prison=prison_choice,
+                        region=region,
+                        today=date.today()
+                    ),
+                    comparison={
+                        "Host": None,
+                        "Production": comp_df
+                    }
+                ),
                 file_name="production_quote.html",
                 mime="text/html"
             )
