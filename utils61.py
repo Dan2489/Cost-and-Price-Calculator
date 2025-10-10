@@ -13,7 +13,6 @@ def inject_govuk_css():
             --govuk-green: #00703c;
             --govuk-yellow: #ffdd00;
           }
-          /* Buttons */
           .stButton > button {
             background: var(--govuk-green) !important;
             color: #fff !important;
@@ -26,13 +25,11 @@ def inject_govuk_css():
             outline: 3px solid var(--govuk-yellow) !important;
             box-shadow: 0 0 0 1px #000 inset !important;
           }
-          /* Tables */
           table.custom { width: 100%; border-collapse: collapse; margin: 12px 0; }
           table.custom th, table.custom td {
             border: 1px solid #b1b4b6;
             padding: 6px 10px;
             text-align: left;
-            vertical-align: top;
           }
           table.custom th { background: #f3f2f1; font-weight: bold; }
           table.custom td.neg { color: #d4351c; }
@@ -64,20 +61,6 @@ def fmt_currency(val) -> str:
     except Exception:
         return str(val)
 
-def _fmt_cell(x):
-    if pd.isna(x):
-        return ""
-    s = str(x).strip()
-    if s == "":
-        return ""
-    try:
-        if "£" in s:
-            s_num = s.replace("£", "").replace(",", "")
-            return fmt_currency(float(s_num))
-        return fmt_currency(float(s))
-    except Exception:
-        return s
-
 # -------------------------------
 # Export functions
 # -------------------------------
@@ -86,45 +69,44 @@ def export_csv_bytes(df: pd.DataFrame) -> bytes:
     df.to_csv(buf, index=False)
     return buf.getvalue().encode("utf-8")
 
-def export_html(
-    df_host: pd.DataFrame | None,
-    df_prod: pd.DataFrame | None,
-    title: str,
-    extra_note: str | None = None,
-    adjusted_df: pd.DataFrame | None = None,
-    comparison_df: pd.DataFrame | None = None
-) -> str:
+def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
+                title: str, extra_note: str = None,
+                adjusted_df: pd.DataFrame = None,
+                comparison_df: pd.DataFrame = None) -> str:
+    """Generate clean HTML for printing or PDF export."""
     styles = """
     <style>
-        body { font-family: Arial, sans-serif; color: #0b0c0c; }
-        h1, h2, h3 { margin: 0.25rem 0 0.5rem 0; }
+        body { font-family: Arial, sans-serif; }
+        h1, h2, h3 { color: #0b0c0c; }
         table.custom { width: 100%; border-collapse: collapse; margin: 12px 0; }
         table.custom th, table.custom td { border: 1px solid #b1b4b6; padding: 6px 10px; text-align: left; }
         table.custom th { background: #f3f2f1; font-weight: bold; }
         table.custom.highlight { background-color: #fff8dc; }
-        .neg { color: #d4351c; }
     </style>
     """
-    html = f"<html><head><meta charset='utf-8' />{styles}</head><body>"
+    html = f"<html><head><meta charset='utf-8'/>{styles}</head><body>"
     html += f"<h1>{title}</h1>"
-    html += ("<p>We are pleased to set out below the terms of our Quotation for the Goods and/or Services "
-             "you are currently seeking. We confirm that this Quotation and any subsequent contract entered "
-             "into as a result is, and will be, subject exclusively to our Standard Conditions of Sale of Goods "
-             "and/or Services a copy of which is available on request. Please note that all prices are exclusive "
-             "of VAT and carriage costs at time of order of which the customer shall be additionally liable to pay.</p>")
+    html += """
+    <p>We are pleased to set out below the terms of our Quotation for the Goods and/or Services you are
+    currently seeking. We confirm that this Quotation and any subsequent contract entered into as a result
+    is, and will be, subject exclusively to our Standard Conditions of Sale of Goods and/or Services a copy
+    of which is available on request. Please note that all prices are exclusive of VAT and carriage costs at
+    time of order of which the customer shall be additionally liable to pay.</p>
+    """
 
     if df_host is not None:
         html += render_table_html(df_host)
     if df_prod is not None:
         html += render_table_html(df_prod)
     if comparison_df is not None:
-        html += "<h3>Instructor Cost Comparison (ex VAT)</h3>"
-        html += render_table_html(comparison_df)
+        html += "<h3>Instructor % Comparison</h3>"
+        html += render_table_html(comparison_df, highlight=True)
     if adjusted_df is not None:
         html += "<h3>Adjusted Costs (for review only)</h3>"
         html += render_table_html(adjusted_df, highlight=True)
     if extra_note:
         html += f"<div style='margin-top:1em'>{extra_note}</div>"
+
     html += "</body></html>"
     return html
 
@@ -135,43 +117,72 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
     if df is None or df.empty:
         return "<p><em>No data</em></p>"
     df_fmt = df.copy()
-    if "Item" in df_fmt.columns:
-        df_fmt["Item"] = df_fmt["Item"].apply(
-            lambda x: f"<span style='color:red'>{x}</span>" if isinstance(x, str) and "Reduction" in x else x
-        )
     for col in df_fmt.columns:
         if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand"]):
             df_fmt[col] = df_fmt[col].apply(_fmt_cell)
     cls = "custom highlight" if highlight else "custom"
     return df_fmt.to_html(index=False, classes=cls, border=0, justify="left", escape=False)
 
-# -------------------------------
-# Comparison Table Renderer
-# -------------------------------
-def render_comparison_table(df: pd.DataFrame, title: str = "Instructor Cost Comparison"):
-    import streamlit as st
-    st.markdown(f"### {title}")
-    st.markdown(render_table_html(df, highlight=True), unsafe_allow_html=True)
+def _fmt_cell(x):
+    if pd.isna(x):
+        return ""
+    s = str(x)
+    if s.strip() == "":
+        return ""
+    try:
+        if "£" in s:
+            s_num = s.replace("£", "").replace(",", "").strip()
+            return fmt_currency(float(s_num))
+        return fmt_currency(float(s))
+    except Exception:
+        return s
 
 # -------------------------------
-# Power BI CSV Export Builder
+# Adjust table for productivity
 # -------------------------------
-def build_powerbi_export(meta: dict, df_main: pd.DataFrame, df_comp: pd.DataFrame | None = None) -> bytes:
-    """Flatten quote + comparison data into single CSV for Power BI."""
-    rows = []
-    base_meta = {k: v for k, v in meta.items()}
-    # Main
-    if isinstance(df_main, pd.DataFrame) and not df_main.empty:
-        for _, r in df_main.iterrows():
-            row = {**base_meta}
-            for c in df_main.columns:
-                row[c] = r[c]
-            rows.append(row)
-    # Comparison
-    if isinstance(df_comp, pd.DataFrame) and not df_comp.empty:
-        for _, r in df_comp.iterrows():
-            row = {**base_meta}
-            for c in df_comp.columns:
-                row[f"Comparison_{c}"] = r[c]
-            rows.append(row)
-    return export_csv_bytes(pd.DataFrame(rows))
+def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
+    """Scale numeric/currency values by factor and return formatted copy."""
+    if df is None or df.empty:
+        return df
+    df_adj = df.copy()
+    for col in df_adj.columns:
+        if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand"]):
+            df_adj[col] = df_adj[col].map(lambda v: _scale_currency(v, factor))
+    return df_adj
+
+def _scale_currency(val, factor):
+    try:
+        v = float(str(val).replace("£", "").replace(",", ""))
+        return fmt_currency(v * factor)
+    except Exception:
+        return val
+
+# -------------------------------
+# Comparison rendering (new)
+# -------------------------------
+def render_comparison_table(df: pd.DataFrame, title: str):
+    """Render comparison tables for Instructor %."""
+    import streamlit as st
+    if df is None or df.empty:
+        st.warning("No comparison data available.")
+        return
+    st.markdown(f"### {title}")
+    st.markdown(render_table_html(df), unsafe_allow_html=True)
+
+# -------------------------------
+# Power BI export (new)
+# -------------------------------
+def build_powerbi_export(meta: dict, df_main: pd.DataFrame, df_comp: pd.DataFrame) -> bytes:
+    """Combine all quote data into one CSV export for Power BI."""
+    df_meta = pd.DataFrame([meta])
+    frames = [df_meta]
+    if df_main is not None and not df_main.empty:
+        df_main = df_main.copy()
+        df_main.insert(0, "Section", "Main Quote")
+        frames.append(df_main)
+    if df_comp is not None and not df_comp.empty:
+        df_comp = df_comp.copy()
+        df_comp.insert(0, "Section", "Comparison")
+        frames.append(df_comp)
+    df_out = pd.concat(frames, ignore_index=True)
+    return export_csv_bytes(df_out)
