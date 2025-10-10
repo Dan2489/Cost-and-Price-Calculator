@@ -6,13 +6,15 @@ from config61 import CFG
 from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from utils61 import (
     inject_govuk_css, sidebar_controls, fmt_currency,
-    export_csv_bytes, export_html, render_table_html, adjust_table
+    export_csv_bytes, export_html, render_table_html, adjust_table,
+    render_comparison_table, build_powerbi_export
 )
 from production61 import (
     labour_minutes_budget,
     calculate_production_contractual,
     calculate_adhoc,
     build_adhoc_table,
+    build_production_comparison
 )
 import host61
 
@@ -32,12 +34,11 @@ lock_overheads, instructor_pct, prisoner_output = sidebar_controls(CFG.GLOBAL_OU
 # Base inputs
 # -------------------------------
 prisons_sorted = ["Select"] + sorted(PRISON_TO_REGION.keys())
-prison_choice = st.selectbox("Prison Name", prisons_sorted, index=0, key="prison_choice")
+prison_choice = st.selectbox("Prison Name", prisons_sorted, index=0)
 region = PRISON_TO_REGION.get(prison_choice, "Select") if prison_choice != "Select" else "Select"
-st.session_state["region"] = region
 
-customer_name = st.text_input("Customer Name", key="customer_name")
-contract_type = st.selectbox("Contract Type", ["Select", "Host", "Production"], key="contract_type")
+customer_name = st.text_input("Customer Name")
+contract_type = st.selectbox("Contract Type", ["Select", "Host", "Production"])
 
 workshop_hours = st.number_input("How many hours is the workshop open per week?", min_value=0.0, format="%.2f")
 num_prisoners = st.number_input("How many prisoners employed per week?", min_value=0, step=1)
@@ -59,6 +60,13 @@ if num_supervisors > 0 and region != "Select" and not customer_covers_supervisor
 
 contracts = st.number_input("How many contracts do they oversee in this workshop?", min_value=1, value=1)
 
+# Recommended instructor allocation
+if workshop_hours > 0:
+    recommended_pct = min(100.0, (workshop_hours / 37.5) * (1 / contracts) * 100.0)
+    st.info(f"Recommended Instructor allocation: **{recommended_pct:.1f}%** (based on hours open and contracts)")
+else:
+    recommended_pct = 100.0
+
 employment_support = st.selectbox(
     "What employment support does the customer offer?",
     ["None", "Employment on release/RoTL", "Post release", "Both"],
@@ -74,28 +82,8 @@ def validate_inputs():
     if not str(customer_name).strip(): errors.append("Enter customer name")
     if contract_type == "Select": errors.append("Select contract type")
     if workshop_hours <= 0: errors.append("Workshop hours must be greater than zero")
-    if num_prisoners < 0: errors.append("Prisoners employed cannot be negative")
-    if not customer_covers_supervisors and num_supervisors > 0 and len(supervisor_salaries) != num_supervisors:
-        errors.append("Choose a title for each instructor")
+    if num_prisoners <= 0: errors.append("Prisoners employed must be greater than zero")
     return errors
-
-# -------------------------------
-# Helpers
-# -------------------------------
-def _get_base_total(df: pd.DataFrame) -> float:
-    try:
-        if {"Item", "Amount (£)"}.issubset(df.columns):
-            mask = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False)
-            if mask.any():
-                val = pd.to_numeric(df.loc[mask, "Amount (£)"], errors="coerce").dropna()
-                if not val.empty:
-                    return float(val.iloc[-1])
-        for col in ["Monthly Total inc VAT (£)", "Monthly Total (inc VAT £)", "Monthly Total (£)"]:
-            if col in df.columns:
-                return float(pd.to_numeric(df[col], errors="coerce").fillna(0).sum())
-    except Exception:
-        pass
-    return 0.0
 
 # -------------------------------
 # HOST
@@ -120,50 +108,27 @@ if contract_type == "Host":
                 lock_overheads=lock_overheads,
             )
             st.session_state["host_df"] = host_df
+            st.session_state["host_comp"] = ctx["comparison"]
 
     if "host_df" in st.session_state:
         df = st.session_state["host_df"]
-        if customer_covers_supervisors:
-            df = df[~df["Item"].str.contains("Instructor Salary", na=False)]
+        df_comp = st.session_state.get("host_comp")
 
-        # Highlight Development Charge reductions in red
-        if "Item" in df.columns:
-            df_display = df.copy()
-            df_display["Item"] = df_display["Item"].apply(
-                lambda x: f"<span style='color:red'>{x}</span>" if "Reduction" in str(x) else x
-            )
-            st.markdown(render_table_html(df_display), unsafe_allow_html=True)
-        else:
-            st.markdown(render_table_html(df), unsafe_allow_html=True)
-
-        # Productivity slider
+        st.markdown(render_table_html(df), unsafe_allow_html=True)
         st.markdown("---")
-        prod_host = st.slider("Adjust for Productivity (%)", 50, 100, 100, step=5, key="prod_adj_host")
+        render_comparison_table(df_comp, "Instructor % Comparison (Host)")
 
-        base_total = _get_base_total(df)
-        adjusted_total = base_total * (prod_host / 100.0)
-        st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
-
-        if prod_host < 100:
-            df_adj = adjust_table(df, prod_host / 100.0)
-            st.markdown("### Adjusted Costs (for review only)")
-            st.markdown(render_table_html(df_adj, highlight=True), unsafe_allow_html=True)
-            st.caption("_Productivity assumptions applied — reviewed annually with Commercial._")
-
-            extra_note = (
-                f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
-                "<p><em>Productivity assumptions have been applied. These will be reviewed annually with Commercial.</em></p>"
-            )
-        else:
-            df_adj, extra_note = None, None
-
+        # Downloads
+        meta = {"Type": "Host", "Prison": prison_choice, "Customer": customer_name, "Date": date.today()}
+        csv_data = build_powerbi_export(meta, df, df_comp)
         c1, c2 = st.columns(2)
-        with c1: 
-            st.download_button("Download CSV (Host)", data=export_csv_bytes(df), file_name="host_quote.csv", mime="text/csv")
-        with c2: 
+        with c1:
+            st.download_button("Download CSV (Host + Comparison)", data=csv_data,
+                               file_name="host_quote.csv", mime="text/csv")
+        with c2:
             st.download_button(
                 "Download PDF-ready HTML (Host)",
-                data=export_html(df, None, title="Host Quote", extra_note=extra_note, adjusted_df=df_adj),
+                data=export_html(df, None, title="Host Quote", comparison_df=df_comp),
                 file_name="host_quote.html", mime="text/html"
             )
 
@@ -175,158 +140,108 @@ if contract_type == "Production":
     st.subheader("Production settings")
 
     output_scale = float(prisoner_output) / 100.0
-    budget_minutes_raw = labour_minutes_budget(int(num_prisoners), float(workshop_hours))
-    budget_minutes_planned = budget_minutes_raw * output_scale
-    st.info(f"Available Labour minutes per week @ {prisoner_output}% = **{budget_minutes_planned:,.0f} minutes**.")
+    budget_minutes = labour_minutes_budget(num_prisoners, workshop_hours) * output_scale
+    st.info(f"Available Labour minutes per week @ {prisoner_output}% = **{budget_minutes:,.0f} minutes**.")
 
     prod_mode = st.radio("Do you want contractual or ad-hoc costs?", ["Contractual", "Ad-hoc"], index=0)
 
+    # ----- Contractual -----
     if prod_mode == "Contractual":
         pricing_mode = st.radio("Price based on:", ["Maximum units from capacity", "Target units per week"], index=0)
-        pricing_mode_key = "as-is" if pricing_mode.startswith("Maximum") else "target"
+        pricing_key = "as-is" if pricing_mode.startswith("Maximum") else "target"
 
-        num_items = st.number_input("Number of items produced?", min_value=1, value=1, step=1, key="num_items_prod")
-        items, targets = [], []
-
-        for i in range(int(num_items)):
+        num_items = st.number_input("Number of items produced?", min_value=1, value=1, step=1)
+        items = []
+        for i in range(num_items):
             with st.expander(f"Item {i+1} details", expanded=(i == 0)):
                 name = st.text_input(f"Item {i+1} Name", key=f"name_{i}")
-                disp = (name.strip() or f"Item {i+1}") if isinstance(name, str) else f"Item {i+1}"
+                required = st.number_input(f"Prisoners required to make 1 item ({name or 'Item'})", min_value=1, value=1)
+                mins_or_secs = st.radio(f"Input unit for production time ({name or 'Item'})", ["Minutes", "Seconds"], key=f"unit_{i}", horizontal=True)
+                time_value = st.number_input(f"How long to make 1 item ({name or 'Item'}) ({mins_or_secs.lower()})",
+                                             min_value=0.1, format="%.2f", key=f"mins_{i}")
+                minutes_per = time_value / 60.0 if mins_or_secs == "Seconds" else time_value
 
-                required = st.number_input(
-                    f"Prisoners required to make 1 item ({disp})",
-                    min_value=1, value=1, step=1, key=f"req_{i}"
-                )
+                assigned = st.number_input(f"How many prisoners work solely on this item ({name or 'Item'})",
+                                           min_value=0, max_value=num_prisoners, value=1, step=1, key=f"assigned_{i}")
 
-                # ---- Minutes/Seconds dual input (Contractual) ----
-                col_m, col_s = st.columns([1, 1])
-                with col_m:
-                    mins_val = st.number_input(f"Minutes per item ({disp})", min_value=0, value=0, step=1, key=f"mins_{i}")
-                with col_s:
-                    secs_val = st.number_input(f"Seconds per item ({disp})", min_value=0, max_value=59, value=0, step=1, key=f"secs_{i}")
-                minutes_per = float(mins_val) + float(secs_val) / 60.0
-                # ---------------------------------------------------
-
-                total_assigned_before = sum(int(st.session_state.get(f"assigned_{j}", 0)) for j in range(i))
-                remaining = max(0, int(num_prisoners) - total_assigned_before)
-                assigned = st.number_input(
-                    f"How many prisoners work solely on this item ({disp})",
-                    min_value=0, max_value=remaining, value=int(st.session_state.get(f"assigned_{i}", 0)),
-                    step=1, key=f"assigned_{i}"
-                )
-
-                if assigned > 0 and minutes_per > 0 and required > 0 and workshop_hours > 0:
-                    cap_100 = (assigned * workshop_hours * 60.0) / (minutes_per * required)
-                else:
-                    cap_100 = 0.0
-                cap_planned = cap_100 * output_scale
-                st.caption(f"{disp} capacity @ 100%: **{cap_100:.0f} units/week** · @ {prisoner_output}%: **{cap_planned:.0f}**")
-
-                if pricing_mode_key == "target":
-                    tgt_default = int(round(cap_planned)) if cap_planned > 0 else 0
-                    tgt = st.number_input(f"Target units per week ({disp})", min_value=0, value=tgt_default, step=1, key=f"target_{i}")
-                    targets.append(int(tgt))
+                current_price = st.number_input(f"Current price per unit (£) ({name or 'Item'})", min_value=0.0, format="%.2f", key=f"curr_{i}")
 
                 items.append({
-                    "name": name,
-                    "required": int(required),
-                    "minutes": float(minutes_per),
-                    "assigned": int(assigned)
+                    "name": name or f"Item {i+1}",
+                    "required": required,
+                    "minutes": minutes_per,
+                    "assigned": assigned,
+                    "current_price": current_price,
                 })
 
-        total_assigned = sum(it["assigned"] for it in items)
-        used_minutes_raw = total_assigned * workshop_hours * 60.0
-        used_minutes_planned = used_minutes_raw * output_scale
-        st.markdown(f"**Planned used Labour minutes @ {prisoner_output}%:** {used_minutes_planned:,.0f}")
-
-        if pricing_mode_key == "as-is" and used_minutes_planned > budget_minutes_planned:
-            st.error("Planned used minutes exceed planned available minutes.")
-        else:
-            if st.button("Generate Production Costs", key="generate_contractual"):
-                errs = validate_inputs()
-                if errs:
-                    st.error("Fix errors:\n- " + "\n- ".join(errs))
-                else:
-                    results = calculate_production_contractual(
-                        items, int(prisoner_output),
-                        workshop_hours=float(workshop_hours),
-                        prisoner_salary=float(prisoner_salary),
-                        supervisor_salaries=supervisor_salaries,
-                        effective_pct=float(instructor_pct),
-                        customer_covers_supervisors=customer_covers_supervisors,
-                        region=region,
-                        customer_type="Commercial",
-                        apply_vat=True, vat_rate=20.0,
-                        num_prisoners=int(num_prisoners),
-                        num_supervisors=int(num_supervisors),
-                        dev_rate=0.0,
-                        pricing_mode=pricing_mode_key,
-                        targets=targets if pricing_mode_key == "target" else None,
-                        lock_overheads=lock_overheads,
-                        employment_support=employment_support,
-                    )
-                    display_cols = ["Item", "Output %", "Capacity (units/week)", "Units/week",
-                                    "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
-                                    "Monthly Total ex VAT (£)", "Monthly Total inc VAT (£)"]
-                    if pricing_mode_key == "target":
-                        display_cols += ["Feasible", "Note"]
-
-                    prod_df = pd.DataFrame([{
-                        k: (None if r.get(k) is None else (round(float(r.get(k)), 2) if isinstance(r.get(k), (int, float)) else r.get(k)))
-                        for k in display_cols
-                    } for r in results])
-
-                    st.session_state["prod_df"] = prod_df
-
-    else:  # Ad-hoc
-        num_lines = st.number_input("How many product lines are needed?", min_value=1, value=1, step=1, key="adhoc_num_lines")
-        lines = []
-        for i in range(int(num_lines)):
-            with st.expander(f"Product line {i+1}", expanded=(i == 0)):
-                c1, c2, c3 = st.columns([2, 1, 1])
-                with c1:
-                    item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
-                with c2:
-                    units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key=f"adhoc_units_{i}")
-                with c3:
-                    deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
-
-                c4, c5, c6 = st.columns([1, 1, 1])
-                with c4:
-                    pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
-                # ---- Minutes/Seconds dual input (Ad-hoc) ----
-                with c5:
-                    mins_val = st.number_input("Minutes per item", min_value=0, value=0, step=1, key=f"adhoc_mins_{i}")
-                with c6:
-                    secs_val = st.number_input("Seconds per item", min_value=0, max_value=59, value=0, step=1, key=f"adhoc_secs_{i}")
-                minutes_per_item = float(mins_val) + float(secs_val) / 60.0
-                # ---------------------------------------------
-
-                lines.append({
-                    "name": (item_name.strip() or f"Item {i+1}") if isinstance(item_name, str) else f"Item {i+1}",
-                    "units": int(units_requested),
-                    "deadline": deadline,
-                    "pris_per_item": int(pris_per_item),
-                    "mins_per_item": float(minutes_per_item),
-                })
-
-        if st.button("Generate Ad-hoc Costs", key="generate_adhoc"):
+        if st.button("Generate Production Costs"):
             errs = validate_inputs()
-            if workshop_hours <= 0: errs.append("Hours per week must be > 0 for Ad-hoc")
-            for i, ln in enumerate(lines):
-                if ln["units"] <= 0: errs.append(f"Line {i+1}: Units requested must be > 0")
-                if ln["pris_per_item"] <= 0: errs.append(f"Line {i+1}: Prisoners to make one must be > 0")
-                if ln["mins_per_item"] <= 0: errs.append(f"Line {i+1}: Minutes to make one must be > 0")
+            if errs:
+                st.error("Fix errors:\n- " + "\n- ".join(errs))
+            else:
+                results = calculate_production_contractual(
+                    items, prisoner_output,
+                    workshop_hours=workshop_hours,
+                    prisoner_salary=prisoner_salary,
+                    supervisor_salaries=supervisor_salaries,
+                    effective_pct=instructor_pct,
+                    customer_covers_supervisors=customer_covers_supervisors,
+                    region=region,
+                    customer_type="Commercial",
+                    apply_vat=True, vat_rate=20.0,
+                    num_prisoners=num_prisoners,
+                    num_supervisors=num_supervisors,
+                    dev_rate=0.0,
+                    pricing_mode=pricing_key,
+                    lock_overheads=lock_overheads,
+                    employment_support=employment_support,
+                )
+
+                df = pd.DataFrame(results)
+                df_display = df.copy()
+                for c in df_display.columns:
+                    if "£" in c or "Total" in c or "Price" in c:
+                        df_display[c] = df_display[c].apply(fmt_currency)
+                    if "Uplift" in c:
+                        df_display[c] = df_display[c].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+                st.session_state["prod_df"] = df_display
+                st.session_state["prod_comp"] = build_production_comparison(supervisor_salaries, region, employment_support, lock_overheads, customer_covers_supervisors)
+
+    # ----- Ad-hoc -----
+    if prod_mode == "Ad-hoc":
+        num_lines = st.number_input("How many product lines are needed?", min_value=1, value=1)
+        lines = []
+        for i in range(num_lines):
+            with st.expander(f"Product line {i+1}", expanded=(i == 0)):
+                item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
+                units_requested = st.number_input("Units requested", min_value=1, value=100)
+                deadline = st.date_input("Deadline", value=date.today())
+                pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1)
+                mins_or_secs = st.radio("Input unit for production time", ["Minutes", "Seconds"], key=f"adhoc_unit_{i}", horizontal=True)
+                time_value = st.number_input("Time to make one item", min_value=0.1, format="%.2f")
+                minutes_per_item = time_value / 60.0 if mins_or_secs == "Seconds" else time_value
+                current_price = st.number_input("Current price per unit (£)", min_value=0.0, format="%.2f")
+                lines.append({
+                    "name": item_name or f"Item {i+1}",
+                    "units": units_requested,
+                    "deadline": deadline,
+                    "pris_per_item": pris_per_item,
+                    "mins_per_item": minutes_per_item,
+                    "current_price": current_price,
+                })
+
+        if st.button("Generate Ad-hoc Costs"):
+            errs = validate_inputs()
             if errs:
                 st.error("Fix errors:\n- " + "\n- ".join(errs))
             else:
                 result = calculate_adhoc(
-                    lines, int(prisoner_output),
-                    workshop_hours=float(workshop_hours),
-                    num_prisoners=int(num_prisoners),
-                    prisoner_salary=float(prisoner_salary),
+                    lines, prisoner_output,
+                    workshop_hours=workshop_hours,
+                    num_prisoners=num_prisoners,
+                    prisoner_salary=prisoner_salary,
                     supervisor_salaries=supervisor_salaries,
-                    effective_pct=float(instructor_pct),
+                    effective_pct=instructor_pct,
                     customer_covers_supervisors=customer_covers_supervisors,
                     region=region,
                     customer_type="Commercial",
@@ -336,51 +251,29 @@ if contract_type == "Production":
                     lock_overheads=lock_overheads,
                     employment_support=employment_support,
                 )
-                if result["feasibility"]["hard_block"]:
-                    st.error(result["feasibility"]["reason"])
-                else:
-                    df, totals = build_adhoc_table(result)
-                    st.session_state["prod_df"] = df
+                df, totals = build_adhoc_table(result)
+                st.session_state["prod_df"] = df
+                st.session_state["prod_comp"] = build_production_comparison(supervisor_salaries, region, employment_support, lock_overheads, customer_covers_supervisors)
 
-    if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
+    # ----- Display results -----
+    if "prod_df" in st.session_state:
         df = st.session_state["prod_df"]
-        if customer_covers_supervisors and "Item" in df.columns:
-            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
+        df_comp = st.session_state.get("prod_comp")
+
         st.markdown(render_table_html(df), unsafe_allow_html=True)
-
-        # Productivity slider
         st.markdown("---")
-        prod_prod = st.slider("Adjust for Productivity (%)", 50, 100, 100, step=5, key="prod_adj_prod")
+        render_comparison_table(df_comp, "Instructor % Comparison (Production)")
 
-        base_total = _get_base_total(df)
-        adjusted_total = base_total * (prod_prod / 100.0)
-        st.markdown(f"**Adjusted Grand Total: {fmt_currency(adjusted_total)}**")
-
-        if prod_prod < 100:
-            df_adj = adjust_table(df, prod_prod / 100.0)
-            st.markdown("### Adjusted Costs (for review only)")
-            st.markdown(render_table_html(df_adj, highlight=True), unsafe_allow_html=True)
-            st.caption("_Productivity assumptions applied — reviewed annually with Commercial._")
-
-            extra_note = (
-                f"<p><strong>Adjusted Grand Total:</strong> {fmt_currency(adjusted_total)}</p>"
-                "<p><em>Productivity assumptions have been applied. These will be reviewed annually with Commercial.</em></p>"
-            )
-        else:
-            df_adj, extra_note = None, None
-
+        meta = {"Type": "Production", "Prison": prison_choice, "Customer": customer_name, "Date": date.today()}
+        csv_data = build_powerbi_export(meta, df, df_comp)
         c1, c2 = st.columns(2)
         with c1:
-            st.download_button(
-                "Download CSV (Production)",
-                data=export_csv_bytes(df),
-                file_name="production_quote.csv",
-                mime="text/csv"
-            )
+            st.download_button("Download CSV (Production + Comparison)", data=csv_data,
+                               file_name="production_quote.csv", mime="text/csv")
         with c2:
             st.download_button(
                 "Download PDF-ready HTML (Production)",
-                data=export_html(None, df, title="Production Quote", extra_note=extra_note, adjusted_df=df_adj),
+                data=export_html(None, df, title="Production Quote", comparison_df=df_comp),
                 file_name="production_quote.html",
                 mime="text/html"
             )
