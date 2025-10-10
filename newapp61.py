@@ -7,7 +7,7 @@ from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from utils61 import (
     inject_govuk_css, sidebar_controls, fmt_currency,
     export_csv_bytes, export_html, render_table_html,
-    recompute_host_for_allocation, recompute_prod_for_allocation
+    recompute_host_for_allocation, build_prod_comparison
 )
 from production61 import (
     labour_minutes_budget,
@@ -25,7 +25,7 @@ inject_govuk_css()
 st.title("Cost and Price Calculator")
 
 # -------------------------------
-# Sidebar (no productivity slider anymore)
+# Sidebar (no productivity slider)
 # -------------------------------
 lock_overheads, instructor_pct, prisoner_output = sidebar_controls(CFG.GLOBAL_OUTPUT_DEFAULT)
 
@@ -86,12 +86,14 @@ def validate_inputs():
 def _get_base_total(df: pd.DataFrame) -> float:
     try:
         if {"Item", "Amount (£)"}.issubset(df.columns):
-            mask = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False)
-            if mask.any():
-                val = pd.to_numeric(df.loc[mask, "Amount (£)"], errors="coerce").dropna()
+            # Prefer Subtotal (ex VAT)
+            mask_sub = df["Item"].astype(str).str.contains("^Subtotal$", case=False, na=False)
+            if mask_sub.any():
+                val = pd.to_numeric(df.loc[mask_sub, "Amount (£)"], errors="coerce").dropna()
                 if not val.empty:
                     return float(val.iloc[-1])
-        for col in ["Monthly Total inc VAT (£)", "Monthly Total (inc VAT £)", "Monthly Total (£)"]:
+            # Fallback: sum 'Monthly Total ex VAT' style columns
+        for col in ["Monthly Total ex VAT (£)", "Monthly Total (ex VAT £)", "Monthly Total (£)"]:
             if col in df.columns:
                 return float(pd.to_numeric(df[col], errors="coerce").fillna(0).sum())
     except Exception:
@@ -164,7 +166,7 @@ if contract_type == "Host":
             ("50%", 50),
             ("25%", 25),
         ]:
-            df_cmp, total_cmp = recompute_host_for_allocation(
+            df_cmp, total_cmp_ex = recompute_host_for_allocation(
                 base_inputs=dict(
                     workshop_hours=workshop_hours,
                     num_prisoners=num_prisoners,
@@ -179,9 +181,9 @@ if contract_type == "Host":
                 ),
                 allocation_pct=pct
             )
-            comp_rows.append([label, fmt_currency(total_cmp)])
-        comp_df = pd.DataFrame(comp_rows, columns=["Instructor Allocation", "Monthly Grand Total (inc VAT)"])
-        st.markdown(render_table_html(comp_df), unsafe_allow_html=True)
+            comp_rows.append([label, fmt_currency(total_cmp_ex)])
+        comp_df_host = pd.DataFrame(comp_rows, columns=["Instructor Allocation", "Monthly Grand Total (ex VAT)"])
+        st.markdown(render_table_html(comp_df_host), unsafe_allow_html=True)
 
         # Downloads
         c1, c2 = st.columns(2)
@@ -203,8 +205,9 @@ if contract_type == "Host":
                         today=date.today()
                     ),
                     comparison={
-                        "Host": comp_df,
-                        "Production": None
+                        "Host": comp_df_host,
+                        "Production_totals": None,
+                        "Production_units": None
                     }
                 ),
                 file_name="host_quote.html",
@@ -233,7 +236,7 @@ if contract_type == "Production":
         pricing_mode_key = "as-is" if pricing_mode.startswith("Maximum") else "target"
 
         num_items = st.number_input("Number of items produced?", min_value=1, value=1, step=1, key="num_items_prod")
-        items, targets = [], []
+        items, targets, current_prices = [], [], []
 
         for i in range(int(num_items)):
             with st.expander(f"Item {i+1} details", expanded=(i == 0)):
@@ -247,6 +250,10 @@ if contract_type == "Production":
                     f"How many minutes to make 1 item ({disp})",
                     min_value=0.0, value=10.0, format="%.2f", key=f"mins_{i}",
                     help="Enter minutes as decimals (e.g., 0.5 = 30 seconds)."
+                )
+                current_unit_price = st.number_input(
+                    f"Current price per unit (ex VAT) — optional ({disp})",
+                    min_value=0.0, value=0.0, format="%.2f", key=f"curr_{i}"
                 )
 
                 total_assigned_before = sum(int(st.session_state.get(f"assigned_{j}", 0)) for j in range(i))
@@ -270,6 +277,7 @@ if contract_type == "Production":
                     targets.append(int(tgt))
 
                 items.append({"name": name, "required": int(required), "minutes": float(minutes_per), "assigned": int(assigned)})
+                current_prices.append(float(current_unit_price))
 
         total_assigned = sum(it["assigned"] for it in items)
         used_minutes_raw = total_assigned * workshop_hours * 60.0
@@ -313,6 +321,20 @@ if contract_type == "Production":
                             (round(float(results[idx].get(k)), 2) if isinstance(results[idx].get(k), (int, float)) else results[idx].get(k)))
                         for k in display_cols
                     } for idx in range(len(results))])
+
+                    # Attach optional current prices and uplift %
+                    if len(current_prices) == len(prod_df):
+                        prod_df["Current Price ex VAT (£)"] = [None if p <= 0 else round(p, 2) for p in current_prices]
+                        def _uplift(row):
+                            curr = row.get("Current Price ex VAT (£)")
+                            model = row.get("Unit Price ex VAT (£)")
+                            try:
+                                if curr is None or float(curr) <= 0:
+                                    return ""
+                                return round((float(model) - float(curr)) / float(curr) * 100.0, 1)
+                            except Exception:
+                                return ""
+                        prod_df["Uplift vs Current (%)"] = prod_df.apply(_uplift, axis=1)
 
                     st.session_state["prod_df"] = prod_df
 
@@ -380,18 +402,21 @@ if contract_type == "Production":
         # ---- Allocation comparison block (Production) ----
         st.markdown("### Instructor allocation comparison (Production)")
         rec_pct = _recommended_allocation(workshop_hours, contracts)
-        comp_rows = []
-        for label, pct in [
-            (f"Current ({instructor_pct}%)", instructor_pct),
-            (f"Recommended ({rec_pct}%)", rec_pct),
-            ("50%", 50),
-            ("25%", 25),
-        ]:
-            # recompute on the fly using displayed df as a proxy for total
-            total_cmp = recompute_prod_for_allocation(df, pct, instructor_pct)  # scales by ratio of pct/current
-            comp_rows.append([label, fmt_currency(total_cmp)])
-        comp_df = pd.DataFrame(comp_rows, columns=["Instructor Allocation", "Monthly Grand Total (inc VAT)"])
-        st.markdown(render_table_html(comp_df), unsafe_allow_html=True)
+        comp_totals_df, comp_units_df = build_prod_comparison(
+            df=df,
+            current_allocation_pct=instructor_pct,
+            scenarios=[
+                ("Current", instructor_pct),
+                ("Recommended", rec_pct),
+                ("50%", 50),
+                ("25%", 25),
+            ]
+        )
+        st.markdown("#### Scenario totals (ex VAT)")
+        st.markdown(render_table_html(comp_totals_df), unsafe_allow_html=True)
+        if comp_units_df is not None and not comp_units_df.empty:
+            st.markdown("#### Unit prices (ex VAT) and uplift vs current")
+            st.markdown(render_table_html(comp_units_df), unsafe_allow_html=True)
 
         # Downloads
         c1, c2 = st.columns(2)
@@ -419,7 +444,8 @@ if contract_type == "Production":
                     ),
                     comparison={
                         "Host": None,
-                        "Production": comp_df
+                        "Production_totals": comp_totals_df,
+                        "Production_units": comp_units_df
                     }
                 ),
                 file_name="production_quote.html",
