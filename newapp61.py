@@ -165,7 +165,19 @@ if contract_type == "Host":
             region=region
         )
 
-        # Flat one-row CSV (Host)
+        # ------- Host CSV: single flat row (inputs + results) -------
+        source_df = st.session_state["host_df"].copy()
+
+        def _grab_amount(needle: str) -> float:
+            try:
+                m = source_df["Item"].astype(str).str.contains(needle, case=False, na=False)
+                if m.any():
+                    raw = str(source_df.loc[m, "Amount (£)"].iloc[-1]).replace("£", "").replace(",", "")
+                    return float(raw)
+            except Exception:
+                pass
+            return 0.0
+
         common = {
             "Quote Type": "Host",
             "Date": _uk_date(date.today()),
@@ -185,24 +197,19 @@ if contract_type == "Host":
             "Contracts Overseen": contracts,
             "VAT Rate (%)": 20.0,
         }
-        # Map table amounts by name
-        amounts = {}
-        for _, r in df.iterrows():
-            item = str(r.get("Item", "")).strip()
-            val = r.get("Amount (£)")
-            try:
-                v = float(val)
-            except Exception:
-                v = None
-            if "Prisoner" in item: amounts["Host: Prisoner wages (£/month)"] = v
-            elif "Instructor Salary" in item: amounts["Host: Instructor Salary (£/month)"] = v
-            elif "Overheads" in item: amounts["Host: Overheads 61% (£/month)"] = v
-            elif "Development charge reduction" in item: amounts["Host: Development Reduction (£/month)"] = v
-            elif "Revised development charge" in item: amounts["Host: Development Revised (£/month)"] = v
-            elif "Development charge" in item: amounts["Host: Development charge (£/month)"] = v
-            elif item.lower().startswith("subtotal"): amounts["Host: Subtotal (£/month)"] = v
-            elif "VAT" in item: amounts["Host: VAT (£/month)"] = v
-            elif "Grand Total" in item: amounts["Host: Grand Total (£/month)"] = v
+
+        amounts = {
+            "Host: Prisoner wages (£/month)": _grab_amount("Prisoner Wages"),
+            "Host: Instructor Salary (£/month)": _grab_amount("Instructor Salary"),
+            "Host: Overheads 61% (£/month)": _grab_amount("Overheads (61%"),
+            "Host: Development charge (£/month)": _grab_amount("Development charge") if _grab_amount("Revised development charge") == 0 else _grab_amount("Development charge (before"),
+            "Host: Development Reduction (£/month)": _grab_amount("Reduction"),
+            "Host: Development Revised (£/month)": _grab_amount("Revised development charge"),
+            "Host: Subtotal (£/month)": _grab_amount("Subtotal"),
+            "Host: VAT (£/month)": _grab_amount("VAT"),
+            "Host: Grand Total (£/month)": _grab_amount("Grand Total"),
+        }
+
         host_csv = export_csv_bytes_rows([{**common, **amounts}])
 
         c1, c2 = st.columns(2)
@@ -425,7 +432,6 @@ if contract_type == "Production":
                     base = (max(supervisor_salaries) / 52.0) * (float(instructor_pct) / 100.0)
                 overhead_base_weekly = base
             else:
-                # when customer provides instructors we only segregate “share” using the same pattern;
                 if lock_overheads and supervisor_salaries:
                     overhead_base_weekly = (max(supervisor_salaries) / 52.0) * (float(instructor_pct) / 100.0)
                 else:
