@@ -13,6 +13,7 @@ from production61 import (
     calculate_production_contractual,
     calculate_adhoc,
     build_adhoc_table,
+    BAND3_COSTS,   # needed for segregated table
 )
 import host61
 
@@ -59,7 +60,7 @@ if num_supervisors > 0 and region != "Select" and not customer_covers_supervisor
 
 contracts = st.number_input("How many contracts do they oversee in this workshop?", min_value=1, value=1)
 
-# Recommended instructor allocation (info only; does not move the slider)
+# Recommended instructor allocation (info only)
 recommended_pct = round((workshop_hours / 37.5) * (1 / max(1, contracts)) * 100, 1) if workshop_hours > 0 else 0.0
 st.caption(f"Recommended Instructor allocation: **{recommended_pct}%** (based on hours open and contracts)")
 
@@ -102,17 +103,8 @@ def _get_base_total(df: pd.DataFrame) -> float:
     return 0.0
 
 def _to_minutes_from_unit(value: float, unit: str) -> float:
-    """Convert user entry (minutes or seconds) to minutes."""
     v = float(value or 0.0)
-    if unit == "Seconds":
-        return v / 60.0
-    return v
-
-# -------------------------------
-# Segregated production table builder (excludes instructor cost from item unit price)
-# -------------------------------
-# Needs BAND3 costs, import here to avoid circulars
-from production61 import BAND3_COSTS
+    return (v / 60.0) if unit == "Seconds" else v
 
 def _dev_rate_from_support_local(s: str) -> float:
     base = 0.20
@@ -137,10 +129,6 @@ def _build_segregated_production_table(
     employment_support,
     contracts
 ) -> (pd.DataFrame, float):
-    """
-    Returns (df_segregated, monthly_instructor_salary).
-    Per-item rows exclude instructor cost; a single monthly instructor salary line is added.
-    """
     # Instructor weekly total (divide across contracts)
     if customer_covers_supervisors:
         inst_weekly_total = 0.0
@@ -267,7 +255,7 @@ if contract_type == "Host":
         if customer_covers_supervisors and "Item" in df.columns:
             df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
 
-        # Red styling for reductions (render_table_html handles currency formatting)
+        # Red styling for reductions
         if "Item" in df.columns:
             df_display = df.copy()
             df_display["Item"] = df_display["Item"].apply(
@@ -303,7 +291,6 @@ if contract_type == "Production":
 
     prod_mode = st.radio("Do you want contractual or ad-hoc costs?", ["Contractual", "Ad-hoc"], index=0)
 
-    # ---------------- Contractual ----------------
     if prod_mode == "Contractual":
         pricing_mode = st.radio("Price based on:", ["Maximum units from capacity", "Target units per week"], index=0)
         pricing_mode_key = "as-is" if pricing_mode.startswith("Maximum") else "target"
@@ -338,7 +325,6 @@ if contract_type == "Production":
                     step=1, key=f"assigned_{i}"
                 )
 
-                # Capacity preview
                 if assigned > 0 and minutes_per > 0 and required > 0 and workshop_hours > 0:
                     cap_100 = (assigned * workshop_hours * 60.0) / (minutes_per * required)
                 else:
@@ -346,7 +332,6 @@ if contract_type == "Production":
                 cap_planned = cap_100 * output_scale
                 st.caption(f"{disp} capacity @ 100%: **{cap_100:.0f} units/week** · @ {prisoner_output}%: **{cap_planned:.0f}**")
 
-                # Target input — ONLY when target mode
                 if pricing_mode_key == "target":
                     tgt_default = int(round(cap_planned)) if cap_planned > 0 else 0
                     tgt = st.number_input(f"Target units per week ({disp})", min_value=0, value=tgt_default, step=1, key=f"target_{i}")
@@ -396,7 +381,7 @@ if contract_type == "Production":
                         for k in display_cols
                     } for r in results])
 
-                    # Segregated view (excludes instructor from per-item unit cost, adds one monthly instructor line)
+                    # Segregated view (excludes instructor from per-item unit cost)
                     prod_df_segregated, monthly_inst_total = _build_segregated_production_table(
                         items=items,
                         targets=targets if pricing_mode_key == "target" else [],
@@ -417,8 +402,7 @@ if contract_type == "Production":
                     st.session_state["prod_df_segregated"] = prod_df_segregated
                     st.session_state["prod_monthly_inst"] = monthly_inst_total
 
-    # ---------------- Ad-hoc ----------------
-    else:
+    else:  # Ad-hoc
         num_lines = st.number_input("How many product lines are needed?", min_value=1, value=1, step=1, key="adhoc_num_lines")
         lines = []
         for i in range(int(num_lines)):
@@ -428,10 +412,8 @@ if contract_type == "Production":
                 with c2: units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key=f"adhoc_units_{i}")
                 with c3: deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
                 c4, c5 = st.columns([1, 1])
-                with c4:
-                    pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
+                with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
                 with c5:
-                    # minutes/seconds input for ad-hoc too
                     unit_choice = st.radio(
                         f"Input unit for production time (Item {i+1})", ["Minutes", "Seconds"],
                         horizontal=True, key=f"adhoc_unit_choice_{i}"
@@ -480,7 +462,7 @@ if contract_type == "Production":
                     st.error(result["feasibility"]["reason"])
                 else:
                     df, totals = build_adhoc_table(result)
-                    st.session_state["prod_df_combined"] = df  # treat as the main table for ad-hoc
+                    st.session_state["prod_df_combined"] = df
                     st.session_state["prod_df_segregated"] = None
 
     # -------- Display + downloads (Production) --------
@@ -493,7 +475,6 @@ if contract_type == "Production":
             st.markdown("### Production — Segregated View (Instructor shown separately)")
             st.markdown(render_table_html(st.session_state["prod_df_segregated"]), unsafe_allow_html=True)
 
-        # Downloads for production: provide main (combined) table by default
         c1, c2 = st.columns(2)
         with c1:
             st.download_button(
