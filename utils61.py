@@ -52,8 +52,6 @@ def inject_govuk_css():
 def sidebar_controls(default_output: int):
     """
     Returns: (lock_overheads: bool, instructor_pct: int, prisoner_output: int)
-    Note: prisoner_output still returned for Production capacity, but you removed
-          the separate productivity slider from summaries.
     """
     import streamlit as st
     with st.sidebar:
@@ -98,7 +96,6 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
     for col in df_fmt.columns:
         if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand"]):
             df_fmt[col] = df_fmt[col].apply(lambda x: _fmt_cell(x))
-        # colour reductions by name
         if col == "Item":
             df_fmt[col] = df_fmt[col].apply(
                 lambda x: f"<span class='reduction'>{x}</span>" if "Reduction" in str(x) else x
@@ -112,13 +109,15 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
 # -------------------------------
 def export_html(
     df_host: pd.DataFrame,
-    df_prod: pd.DataFrame,
+    df_prod_combined: pd.DataFrame,
     title: str,
     *,
     prison_name: str = "",
     region: str = "",
     customer_name: str = "",
     uk_date: str = "",
+    df_prod_segregated: pd.DataFrame = None,
+    monthly_instructor_salary: float = None,
     extra_note: str = None
 ) -> str:
     styles = """
@@ -133,7 +132,6 @@ def export_html(
     html = f"<html><head><meta charset='utf-8' />{styles}</head><body>"
     html += f"<h1>{title}</h1>"
 
-    # Header meta + quotation text
     meta = []
     if uk_date: meta.append(f"Date: {uk_date}")
     if customer_name: meta.append(f"Customer: {customer_name}")
@@ -153,9 +151,16 @@ def export_html(
     if df_host is not None:
         html += "<h3>Host Costs</h3>"
         html += render_table_html(df_host)
-    if df_prod is not None:
-        html += "<h3>Production Items</h3>"
-        html += render_table_html(df_prod)
+
+    if df_prod_combined is not None:
+        html += "<h3>Production – Combined Costs</h3>"
+        html += render_table_html(df_prod_combined)
+
+    if df_prod_segregated is not None:
+        html += "<h3>Production – Instructor Segregated</h3>"
+        if monthly_instructor_salary is not None:
+            html += f"<p><strong>Monthly Instructor Salary (segregated):</strong> {fmt_currency(monthly_instructor_salary)}</p>"
+        html += render_table_html(df_prod_segregated, highlight=True)
 
     if extra_note:
         html += f"<div style='margin-top:1em'>{extra_note}</div>"
