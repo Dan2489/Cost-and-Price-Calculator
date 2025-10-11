@@ -93,12 +93,26 @@ def _fmt_cell(x):
         return s
 
 # -------------------------------
-# CSV export (flat)
+# CSV export helpers
 # -------------------------------
 def export_csv_bytes(df: pd.DataFrame) -> bytes:
+    """Legacy export: write the provided DataFrame as-is."""
     buf = io.StringIO()
     df.to_csv(buf, index=False)
     return buf.getvalue().encode("utf-8")
+
+def export_csv_bytes_rows(rows: list[dict], columns_order: list[str] | None = None) -> bytes:
+    """Export a list of dict rows (flat, Power BI–friendly)."""
+    if not rows:
+        rows = [{}]
+    df = pd.DataFrame(rows)
+    if columns_order:
+        # add any missing columns so order stays stable
+        for col in columns_order:
+            if col not in df.columns:
+                df[col] = ""
+        df = df[columns_order]
+    return export_csv_bytes(df)
 
 # -------------------------------
 # HTML export (PDF-ready)
@@ -108,7 +122,7 @@ def export_html(
     df_prod: pd.DataFrame,
     *,
     title: str,
-    header_block: str = None,
+    header_block: str = None,   # << optional header with date, customer, prison + standard text
     extra_note: str = None,
     adjusted_df: pd.DataFrame = None
 ) -> str:
@@ -144,6 +158,31 @@ def export_html(
 
     html += "</body></html>"
     return html
+
+def build_header_block(
+    *,
+    uk_date: str,
+    customer_name: str,
+    prison_name: str,
+    region: str
+) -> str:
+    """Standard header block with basic details and quotation text."""
+    # Standard quotation text (kept verbatim as requested)
+    p = (
+        "We are pleased to set out below the terms of our Quotation for the Goods and/or Services you are "
+        "currently seeking. We confirm that this Quotation and any subsequent contract entered into as a result "
+        "is, and will be, subject exclusively to our Standard Conditions of Sale of Goods and/or Services a copy "
+        "of which is available on request. Please note that all prices are exclusive of VAT and carriage costs at "
+        "time of order of which the customer shall be additionally liable to pay."
+    )
+    parts = [
+        f"<p><strong>Date:</strong> {uk_date}<br/>"
+        f"<strong>Customer:</strong> {customer_name}<br/>"
+        f"<strong>Prison:</strong> {prison_name}<br/>"
+        f"<strong>Region:</strong> {region}</p>",
+        f"<p>{p}</p>"
+    ]
+    return "".join(parts)
 
 # -------------------------------
 # Table rendering for app/html
