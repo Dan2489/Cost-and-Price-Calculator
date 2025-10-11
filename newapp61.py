@@ -6,14 +6,14 @@ from config61 import CFG
 from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from utils61 import (
     inject_govuk_css, sidebar_controls, fmt_currency,
-    export_csv_bytes, export_html, render_table_html, adjust_table
+    export_csv_bytes, export_html, render_table_html, adjust_table, export_csv_bytes_full
 )
 from production61 import (
     labour_minutes_budget,
     calculate_production_contractual,
     calculate_adhoc,
     build_adhoc_table,
-    BAND3_COSTS,   # needed for segregated table
+    BAND3_COSTS,   # used for segregated view
 )
 import host61
 
@@ -265,14 +265,37 @@ if contract_type == "Host":
         else:
             st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Downloads
+        # Build meta block for export
+        meta = {
+            "prison_name": prison_choice,
+            "region": region,
+            "customer_name": customer_name,
+            "date": date.today().strftime("%d %B %Y"),
+            "contract_type": "Host",
+            "employment_support": employment_support,
+            "workshop_hours": workshop_hours,
+            "num_prisoners": num_prisoners,
+            "prisoner_salary": prisoner_salary,
+            "num_supervisors": num_supervisors,
+            "customer_covers_supervisors": customer_covers_supervisors,
+            "instructor_allocation": instructor_pct,
+            "recommended_allocation": recommended_pct,
+            "contracts": contracts,
+            "lock_overheads": lock_overheads,
+        }
+
         c1, c2 = st.columns(2)
         with c1:
-            st.download_button("Download CSV (Host)", data=export_csv_bytes(df), file_name="host_quote.csv", mime="text/csv")
+            st.download_button(
+                "Download CSV (Host - Full)",
+                data=export_csv_bytes_full(meta=meta, df_host=df, df_prod_main=None, df_prod_segregated=None),
+                file_name="host_full_export.csv",
+                mime="text/csv"
+            )
         with c2:
             st.download_button(
                 "Download PDF-ready HTML (Host)",
-                data=export_html(df, None, title="Host Quote"),
+                data=export_html(df, None, title="Host Quote", meta=meta),
                 file_name="host_quote.html",
                 mime="text/html"
             )
@@ -468,25 +491,50 @@ if contract_type == "Production":
     # -------- Display + downloads (Production) --------
     if "prod_df_combined" in st.session_state and isinstance(st.session_state["prod_df_combined"], pd.DataFrame):
         df_main = st.session_state["prod_df_combined"]
+        df_segr = st.session_state.get("prod_df_segregated")
+
         st.markdown("### Production — Standard View")
         st.markdown(render_table_html(df_main), unsafe_allow_html=True)
 
-        if "prod_df_segregated" in st.session_state and isinstance(st.session_state["prod_df_segregated"], pd.DataFrame):
+        if isinstance(df_segr, pd.DataFrame):
             st.markdown("### Production — Segregated View (Instructor shown separately)")
-            st.markdown(render_table_html(st.session_state["prod_df_segregated"]), unsafe_allow_html=True)
+            st.markdown(render_table_html(df_segr), unsafe_allow_html=True)
+
+        # Build meta block for export
+        meta = {
+            "prison_name": prison_choice,
+            "region": region,
+            "customer_name": customer_name,
+            "date": date.today().strftime("%d %B %Y"),
+            "contract_type": "Production",
+            "employment_support": employment_support,
+            "workshop_hours": workshop_hours,
+            "num_prisoners": num_prisoners,
+            "prisoner_salary": prisoner_salary,
+            "num_supervisors": num_supervisors,
+            "customer_covers_supervisors": customer_covers_supervisors,
+            "instructor_allocation": instructor_pct,
+            "recommended_allocation": recommended_pct,
+            "contracts": contracts,
+            "lock_overheads": lock_overheads,
+            "prisoner_output_percent": prisoner_output,
+        }
 
         c1, c2 = st.columns(2)
         with c1:
             st.download_button(
-                "Download CSV (Production)",
-                data=export_csv_bytes(df_main),
-                file_name="production_quote.csv",
+                "Download CSV (Production - Full)",
+                data=export_csv_bytes_full(meta=meta, df_host=None, df_prod_main=df_main, df_prod_segregated=df_segr),
+                file_name="production_full_export.csv",
                 mime="text/csv"
             )
         with c2:
             st.download_button(
                 "Download PDF-ready HTML (Production)",
-                data=export_html(None, df_main, title="Production Quote"),
+                data=export_html(
+                    None, df_main, title="Production Quote",
+                    meta=meta, df_prod_segregated=df_segr
+                ),
                 file_name="production_quote.html",
                 mime="text/html"
             )
