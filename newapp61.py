@@ -9,6 +9,7 @@ from utils61 import (
     export_csv_bytes, export_html, render_table_html
 )
 from production61 import (
+    BAND3_COSTS,
     labour_minutes_budget,
     calculate_production_contractual,
     calculate_adhoc,
@@ -59,7 +60,7 @@ if num_supervisors > 0 and region != "Select" and not customer_covers_supervisor
 
 contracts = st.number_input("How many contracts do they oversee in this workshop?", min_value=1, value=1)
 
-# Recommendation (show only; does not move the slider)
+# Recommendation (display only)
 try:
     recommended_pct = round((workshop_hours / 37.5) * (1 / contracts) * 100, 1) if contracts and workshop_hours >= 0 else 0.0
 except Exception:
@@ -105,8 +106,15 @@ def _get_base_total(df: pd.DataFrame) -> float:
     return 0.0
 
 def _uk_date(d: date) -> str:
-    # UK format: DD/MM/YYYY
     return d.strftime("%d/%m/%Y")
+
+def _dev_rate_from_support(s: str) -> float:
+    # Base 20%, minus 10% for each support; floor at 0
+    base = 0.20
+    if s == "Employment on release/RoTL": base -= 0.10
+    elif s == "Post release": base -= 0.10
+    elif s == "Both": base -= 0.20
+    return max(0.0, base)
 
 # -------------------------------
 # HOST
@@ -135,7 +143,7 @@ if contract_type == "Host":
 
     if "host_df" in st.session_state:
         df = st.session_state["host_df"]
-        # If customer provides, remove Instructor Salary row from visual table (still used in calc for overhead base)
+        # Hide Instructor Salary line from view if customer supplies instructor(s)
         if customer_covers_supervisors and "Item" in df.columns:
             df_display = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)].copy()
         else:
@@ -143,7 +151,7 @@ if contract_type == "Host":
 
         st.markdown(render_table_html(df_display), unsafe_allow_html=True)
 
-        # --- Downloads ---
+        # Downloads
         header_kwargs = dict(
             prison_name=prison_choice,
             region=region,
@@ -151,9 +159,8 @@ if contract_type == "Host":
             uk_date=_uk_date(date.today()),
         )
 
-        # CSV — flat, includes inputs + calculations
+        # CSV (flat)
         rows = []
-        # one row for Host
         row = {
             "Date": _uk_date(date.today()),
             "Customer": customer_name,
@@ -171,7 +178,6 @@ if contract_type == "Host":
             "Employment support": employment_support,
             "Lock overheads": "Yes" if lock_overheads else "No",
         }
-        # pull key lines from df for columns
         def _grab(name):
             try:
                 v = df.loc[df["Item"] == name, "Amount (£)"].values
@@ -258,7 +264,7 @@ if contract_type == "Production":
                     step=1, key=f"assigned_{i}"
                 )
 
-                # Current price per unit (optional, ex VAT)
+                # Optional current price per unit (ex VAT)
                 current_price = st.number_input(
                     f"Current price per unit (£) ({label})", min_value=0.0, value=0.0, format="%.2f", key=f"curr_price_{i}"
                 )
@@ -294,13 +300,13 @@ if contract_type == "Production":
         else:
             if st.button("Generate Production Costs", key="generate_contractual"):
                 errs = validate_inputs()
-                # also ensure no zero time values
                 for i, it in enumerate(items):
                     if it["minutes"] <= 0:
                         errs.append(f"Item {i+1}: Time per item must be > 0")
                 if errs:
                     st.error("Fix errors:\n- " + "\n- ".join(errs))
                 else:
+                    # === 1) Combined view (the standard one) ===
                     results = calculate_production_contractual(
                         items, int(prisoner_output),
                         workshop_hours=float(workshop_hours),
@@ -313,28 +319,102 @@ if contract_type == "Production":
                         apply_vat=True, vat_rate=20.0,
                         num_prisoners=int(num_prisoners),
                         num_supervisors=int(num_supervisors),
-                        dev_rate=0.0,
+                        dev_rate=_dev_rate_from_support(employment_support),
                         pricing_mode=pricing_mode_key,
                         targets=targets if pricing_mode_key == "target" else None,
                         lock_overheads=lock_overheads,
                         employment_support=employment_support,
                         recommended_allocation=recommended_pct,
                     )
+
                     display_cols = ["Item", "Output %", "Capacity (units/week)", "Units/week",
                                     "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
                                     "Monthly Total ex VAT (£)", "Monthly Total inc VAT (£)"]
                     if pricing_mode_key == "target":
                         display_cols += ["Feasible", "Note"]
 
-                    prod_df = pd.DataFrame([{
+                    prod_df_combined = pd.DataFrame([{
                         k: (None if r.get(k) is None else (round(float(r.get(k)), 2) if isinstance(r.get(k), (int, float)) else r.get(k)))
                         for k in display_cols
                     } for r in results])
 
-                    # Save for display & for CSV build later
-                    st.session_state["prod_df"] = prod_df
-                    st.session_state["prod_items"] = items
-                    st.session_state["prod_pricing_mode"] = pricing_mode_key
+                    # === 2) Segregated view (exclude instructor from per-item unit price) ===
+                    # Instructor weekly total (per workshop; divide by contracts)
+                    if customer_covers_supervisors:
+                        inst_weekly_total = 0.0
+                    else:
+                        inst_weekly_total = sum((s / 52.0) * (float(instructor_pct) / 100.0) for s in supervisor_salaries) / float(contracts)
+
+                    # Overhead base uses instructor (or shadow if customer provides), with lock option
+                    if customer_covers_supervisors:
+                        shadow = BAND3_COSTS.get(region, 42247.81)
+                        overhead_base_weekly = (shadow / 52.0) * (float(instructor_pct) / 100.0)
+                    else:
+                        if lock_overheads and supervisor_salaries:
+                            base = max(supervisor_salaries)
+                            overhead_base_weekly = (base / 52.0) * (float(instructor_pct) / 100.0)
+                        else:
+                            overhead_base_weekly = inst_weekly_total
+
+                    overheads_weekly_total = overhead_base_weekly * 0.61
+                    dev_weekly_total = overheads_weekly_total * _dev_rate_from_support(employment_support)
+
+                    denom = sum(int(it.get("assigned", 0)) * float(workshop_hours) * 60.0 for it in items)
+                    output_scale = float(prisoner_output) / 100.0
+
+                    rows = []
+                    for idx, it in enumerate(items):
+                        name = (it.get("name") or "").strip() or f"Item {idx+1}"
+                        mins_per_unit = float(it.get("minutes", 0))
+                        pris_required = int(it.get("required", 1))
+                        pris_assigned = int(it.get("assigned", 0))
+
+                        # capacity and chosen units
+                        if pris_assigned > 0 and mins_per_unit > 0 and pris_required > 0 and workshop_hours > 0:
+                            cap_100 = (pris_assigned * float(workshop_hours) * 60.0) / (mins_per_unit * pris_required)
+                        else:
+                            cap_100 = 0.0
+                        capacity_units = cap_100 * output_scale
+
+                        if pricing_mode_key == "target":
+                            tgt = int(targets[idx]) if (targets and idx < len(targets)) else 0
+                            units_for_pricing = float(tgt)
+                        else:
+                            units_for_pricing = capacity_units
+
+                        share = ((pris_assigned * float(workshop_hours) * 60.0) / denom) if denom > 0 else 0.0
+
+                        prisoner_weekly_item = pris_assigned * float(prisoner_salary)
+                        overheads_weekly_item = overheads_weekly_total * share
+                        dev_weekly_item = dev_weekly_total * share
+
+                        weekly_cost_excl_inst = prisoner_weekly_item + overheads_weekly_item + dev_weekly_item
+                        unit_cost_excl_inst = (weekly_cost_excl_inst / units_for_pricing) if units_for_pricing > 0 else None
+                        unit_price_ex_vat = unit_cost_excl_inst
+                        unit_price_inc_vat = (unit_price_ex_vat * 1.20) if unit_price_ex_vat is not None else None
+
+                        monthly_total_ex_vat = (units_for_pricing * unit_price_ex_vat * 52 / 12) if unit_price_ex_vat else None
+                        monthly_total_inc_vat = (units_for_pricing * unit_price_inc_vat * 52 / 12) if unit_price_inc_vat else None
+
+                        rows.append({
+                            "Item": name,
+                            "Output %": int(prisoner_output),
+                            "Capacity (units/week)": 0 if capacity_units <= 0 else int(round(capacity_units)),
+                            "Units/week": 0 if units_for_pricing <= 0 else int(round(units_for_pricing)),
+                            "Unit Cost (£)": unit_cost_excl_inst,
+                            "Unit Price ex VAT (£)": unit_price_ex_vat,
+                            "Unit Price inc VAT (£)": unit_price_inc_vat,
+                            "Monthly Total ex VAT (£)": monthly_total_ex_vat,
+                            "Monthly Total inc VAT (£)": monthly_total_inc_vat,
+                        })
+
+                    prod_df_segregated = pd.DataFrame(rows)
+                    monthly_inst_total = (inst_weekly_total * 52.0 / 12.0) if inst_weekly_total else 0.0
+
+                    # Save both for display/exports
+                    st.session_state["prod_df_combined"] = prod_df_combined
+                    st.session_state["prod_df_segregated"] = prod_df_segregated
+                    st.session_state["prod_monthly_inst"] = monthly_inst_total
 
     else:  # Ad-hoc
         num_lines = st.number_input("How many product lines are needed?", min_value=1, value=1, step=1, key="adhoc_num_lines")
@@ -381,7 +461,7 @@ if contract_type == "Production":
                     region=region,
                     customer_type="Commercial",
                     apply_vat=True, vat_rate=20.0,
-                    dev_rate=0.0,
+                    dev_rate=_dev_rate_from_support(employment_support),
                     today=date.today(),
                     lock_overheads=lock_overheads,
                     employment_support=employment_support,
@@ -391,15 +471,27 @@ if contract_type == "Production":
                     st.error(result["feasibility"]["reason"])
                 else:
                     df, totals = build_adhoc_table(result)
-                    st.session_state["prod_df"] = df
-                    st.session_state["adhoc_lines"] = lines
+                    # For Ad-hoc we keep a single table (combined logic)
+                    st.session_state["prod_df_combined"] = df
+                    st.session_state["prod_df_segregated"] = None
+                    st.session_state["prod_monthly_inst"] = None
 
-    # Common Production display + downloads
-    if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
-        df = st.session_state["prod_df"].copy()
-        st.markdown(render_table_html(df), unsafe_allow_html=True)
+    # Common Production display + downloads (both views)
+    if "prod_df_combined" in st.session_state and isinstance(st.session_state["prod_df_combined"], pd.DataFrame):
+        df_combined = st.session_state["prod_df_combined"]
+        df_segregated = st.session_state.get("prod_df_segregated")
+        monthly_inst = st.session_state.get("prod_monthly_inst")
 
-        # --- Downloads ---
+        st.markdown("### Production – Combined Costs")
+        st.markdown(render_table_html(df_combined), unsafe_allow_html=True)
+
+        if isinstance(df_segregated, pd.DataFrame):
+            st.markdown("### Production – Instructor Segregated")
+            if monthly_inst is not None:
+                st.info(f"Monthly Instructor Salary (segregated): **{fmt_currency(monthly_inst)}**")
+            st.markdown(render_table_html(df_segregated, highlight=True), unsafe_allow_html=True)
+
+        # Downloads
         header_kwargs = dict(
             prison_name=prison_choice,
             region=region,
@@ -407,7 +499,7 @@ if contract_type == "Production":
             uk_date=_uk_date(date.today()),
         )
 
-        # CSV — flat rows (one per item/line) with shared inputs first (stable order)
+        # CSV — flatten both (add a View column)
         common = {
             "Date": _uk_date(date.today()),
             "Customer": customer_name,
@@ -427,11 +519,12 @@ if contract_type == "Production":
             "Output %": prisoner_output,
         }
         rows = []
-        # If contractual/target table
-        if "Item" in df.columns:
-            for _, r in df.iterrows():
+        # Combined rows
+        if "Item" in df_combined.columns:
+            for _, r in df_combined.iterrows():
                 rows.append({
                     **common,
+                    "View": "Combined",
                     "Item": r.get("Item"),
                     "Capacity (units/week)": r.get("Capacity (units/week)"),
                     "Units/week": r.get("Units/week"),
@@ -441,19 +534,21 @@ if contract_type == "Production":
                     "Monthly Total (ex VAT £)": r.get("Monthly Total ex VAT (£)"),
                     "Monthly Total (inc VAT £)": r.get("Monthly Total inc VAT (£)"),
                 })
-        else:
-            # Ad-hoc shaped
-            for _, r in df.iterrows():
+        # Segregated rows (if any)
+        if isinstance(df_segregated, pd.DataFrame) and "Item" in df_segregated.columns:
+            for _, r in df_segregated.iterrows():
                 rows.append({
                     **common,
+                    "View": "Segregated",
                     "Item": r.get("Item"),
-                    "Units/week": None,
-                    "Capacity (units/week)": None,
-                    "Unit Cost (ex VAT £)": r.get("Unit Cost (ex VAT £)"),
-                    "Unit Price (ex VAT £)": r.get("Unit Cost (ex VAT £)"),
-                    "Unit Price (inc VAT £)": r.get("Unit Cost (inc VAT £)"),
-                    "Monthly Total (ex VAT £)": r.get("Line Total (ex VAT £)"),
-                    "Monthly Total (inc VAT £)": r.get("Line Total (inc VAT £)"),
+                    "Capacity (units/week)": r.get("Capacity (units/week)"),
+                    "Units/week": r.get("Units/week"),
+                    "Unit Cost (ex VAT £)": r.get("Unit Cost (£)"),
+                    "Unit Price (ex VAT £)": r.get("Unit Price ex VAT (£)"),
+                    "Unit Price (inc VAT £)": r.get("Unit Price inc VAT (£)"),
+                    "Monthly Total (ex VAT £)": r.get("Monthly Total ex VAT (£)"),
+                    "Monthly Total (inc VAT £)": r.get("Monthly Total inc VAT (£)"),
+                    "Monthly Instructor Salary (£)": monthly_inst,
                 })
         csv_prod = pd.DataFrame(rows)
 
@@ -468,7 +563,10 @@ if contract_type == "Production":
         with c2:
             st.download_button(
                 "Download PDF-ready HTML (Production)",
-                data=export_html(None, df, title="Production Quote", **header_kwargs),
+                data=export_html(
+                    None, df_combined, title="Production Quote", **header_kwargs,
+                    df_prod_segregated=df_segregated, monthly_instructor_salary=monthly_inst
+                ),
                 file_name="production_quote.html",
                 mime="text/html"
             )
