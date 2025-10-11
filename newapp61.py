@@ -6,7 +6,8 @@ from config61 import CFG
 from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from utils61 import (
     inject_govuk_css, sidebar_controls, fmt_currency,
-    export_csv_bytes, export_html, render_table_html, adjust_table
+    export_csv_bytes, export_html, render_table_html, adjust_table,
+    export_csv_bytes_rows, build_header_block
 )
 from production61 import (
     labour_minutes_budget,
@@ -58,10 +59,16 @@ if num_supervisors > 0 and region != "Select" and not customer_covers_supervisor
         supervisor_salaries.append(float(pay))
 
 contracts = st.number_input("How many contracts do they oversee in this workshop?", min_value=1, value=1)
-recommended_pct = round((workshop_hours / 37.5) * (1 / contracts) * 100, 1) if contracts and workshop_hours > 0 else 0.0
-if recommended_pct > 100.0:
-    recommended_pct = 100.0
-st.caption(f"Recommended Instructor allocation: **{recommended_pct:.1f}%** (based on hours open and contracts)")
+
+# Recommended instructor allocation
+recommended_pct = 0.0
+try:
+    if workshop_hours > 0 and contracts > 0:
+        recommended_pct = min(100.0, round((workshop_hours / 37.5) * (1.0 / contracts) * 100.0, 1))
+except Exception:
+    recommended_pct = 0.0
+if recommended_pct > 0:
+    st.info(f"Recommended Instructor allocation: {recommended_pct}% (based on hours open and contracts)")
 
 employment_support = st.selectbox(
     "What employment support does the customer offer?",
@@ -83,6 +90,9 @@ def validate_inputs():
         errors.append("Choose a title for each instructor")
     return errors
 
+# -------------------------------
+# Helpers
+# -------------------------------
 def _get_base_total(df: pd.DataFrame) -> float:
     try:
         if {"Item", "Amount (£)"}.issubset(df.columns):
@@ -91,12 +101,22 @@ def _get_base_total(df: pd.DataFrame) -> float:
                 val = pd.to_numeric(df.loc[mask, "Amount (£)"], errors="coerce").dropna()
                 if not val.empty:
                     return float(val.iloc[-1])
-        for col in ["Monthly Total inc VAT (£)", "Monthly Total (inc VAT £)", "Monthly Total (£)"]:
+        for col in ["Monthly Total inc VAT (£)", "Monthly Total (inc VAT £)", "Monthly Total (£)", "Monthly Total ex VAT (£)"]:
             if col in df.columns:
                 return float(pd.to_numeric(df[col], errors="coerce").fillna(0).sum())
     except Exception:
         pass
     return 0.0
+
+def _dev_rate_from_support(s: str) -> float:
+    if s == "None":
+        return 0.20
+    if s in ("Employment on release/RoTL", "Post release"):
+        return 0.10
+    return 0.00
+
+def _uk_date(d: date) -> str:
+    return d.strftime("%d/%m/%Y")
 
 # -------------------------------
 # HOST
@@ -123,11 +143,13 @@ if contract_type == "Host":
             st.session_state["host_df"] = host_df
 
     if "host_df" in st.session_state:
-        df = st.session_state["host_df"]
-        if customer_covers_supervisors:
-            df = df[~df["Item"].str.contains("Instructor Salary", na=False)]
+        df = st.session_state["host_df"].copy()
 
-        # Red for reductions
+        # Hide instructor salary line when customer provides
+        if customer_covers_supervisors and "Item" in df.columns:
+            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
+
+        # Highlight reductions in red (keep others unchanged)
         if "Item" in df.columns:
             df_display = df.copy()
             df_display["Item"] = df_display["Item"].apply(
@@ -137,14 +159,83 @@ if contract_type == "Host":
         else:
             st.markdown(render_table_html(df), unsafe_allow_html=True)
 
+        # === Downloads ===
+        # HTML header block (date + meta + quotation text)
+        header_block = build_header_block(
+            uk_date=_uk_date(date.today()),
+            customer_name=customer_name,
+            prison_name=prison_choice,
+            region=region
+        )
+
+        # Flat CSV rows for Power BI
+        rows = []
+        common = {
+            "Quote Type": "Host",
+            "Date": _uk_date(date.today()),
+            "Prison Name": prison_choice,
+            "Region": region,
+            "Customer Name": customer_name,
+            "Contract Type": "Host",
+            "Workshop Hours / week": workshop_hours,
+            "Prisoners Employed": num_prisoners,
+            "Prisoner Salary / week": prisoner_salary,
+            "Instructors Count": num_supervisors,
+            "Customer Provides Instructors": "Yes" if customer_covers_supervisors else "No",
+            "Instructor Allocation (%)": instructor_pct,
+            "Lock Overheads to Highest": "Yes" if lock_overheads else "No",
+            "Employment Support": employment_support,
+            "Contracts Overseen": contracts,
+            "VAT Rate (%)": 20.0,
+        }
+        # Map host table into named columns
+        amounts = {}
+        for _, r in df.iterrows():
+            item = str(r.get("Item", "")).strip()
+            val = r.get("Amount (£)")
+            try:
+                v = float(val)
+            except Exception:
+                v = None
+            if "Prisoner" in item: amounts["Host: Prisoner wages (£/month)"] = v
+            elif "Instructor Salary" in item: amounts["Host: Instructor Salary (£/month)"] = v
+            elif "Overheads" in item: amounts["Host: Overheads 61% (£/month)"] = v
+            elif "Development charge reduction" in item: amounts["Host: Development Reduction (£/month)"] = v
+            elif "Revised development charge" in item: amounts["Host: Development Revised (£/month)"] = v
+            elif "Development charge" in item: amounts["Host: Development charge (£/month)"] = v
+            elif item.lower().startswith("subtotal"): amounts["Host: Subtotal (£/month)"] = v
+            elif "VAT" in item: amounts["Host: VAT (£/month)"] = v
+            elif "Grand Total" in item: amounts["Host: Grand Total (£/month)"] = v
+
+        row = {**common, **amounts}
+        rows.append(row)
+
+        col_order = list(common.keys()) + [
+            "Host: Prisoner wages (£/month)",
+            "Host: Instructor Salary (£/month)",
+            "Host: Overheads 61% (£/month)",
+            "Host: Development charge (£/month)",
+            "Host: Development Reduction (£/month)",
+            "Host: Development Revised (£/month)",
+            "Host: Subtotal (£/month)",
+            "Host: VAT (£/month)",
+            "Host: Grand Total (£/month)",
+        ]
+
         c1, c2 = st.columns(2)
         with c1:
-            st.download_button("Download CSV (Host)", data=export_csv_bytes(df), file_name="host_quote.csv", mime="text/csv")
+            st.download_button(
+                "Download CSV (Host)",
+                data=export_csv_bytes_rows(rows, columns_order=col_order),
+                file_name="host_quote.csv",
+                mime="text/csv"
+            )
         with c2:
             st.download_button(
                 "Download PDF-ready HTML (Host)",
-                data=export_html(df, None, title="Host Quote"),
-                file_name="host_quote.html", mime="text/html"
+                data=export_html(df, None, title="Host Quote", header_block=header_block),
+                file_name="host_quote.html",
+                mime="text/html"
             )
 
 # -------------------------------
@@ -178,23 +269,23 @@ if contract_type == "Production":
                     min_value=1, value=1, step=1, key=f"req_{i}"
                 )
 
-                # Minutes / Seconds toggle (persistent per item)
                 unit_choice = st.radio(
                     f"Input unit for production time ({disp})",
                     ["Minutes", "Seconds"],
                     index=0,
-                    horizontal=True,
-                    key=f"time_unit_{i}"
+                    key=f"mins_unit_{i}",
+                    horizontal=True
                 )
                 if unit_choice == "Minutes":
-                    minutes_per = st.number_input(
+                    minutes_val = st.number_input(
                         f"How long to make 1 item ({disp}) (minutes)",
-                        min_value=0.0, value=1.0, format="%.2f", key=f"mins_{i}"
+                        min_value=0.0, value=10.0, format="%.4f", key=f"mins_val_{i}"
                     )
+                    minutes_per = float(minutes_val)
                 else:
                     seconds_val = st.number_input(
                         f"How long to make 1 item ({disp}) (seconds)",
-                        min_value=0.0, value=60.0, format="%.2f", key=f"secs_{i}"
+                        min_value=0.0, value=30.0, format="%.2f", key=f"secs_val_{i}"
                     )
                     minutes_per = float(seconds_val) / 60.0
 
@@ -206,9 +297,8 @@ if contract_type == "Production":
                     step=1, key=f"assigned_{i}"
                 )
 
-                # Capacity preview
-                if assigned > 0 and minutes_per > 0 and required > 0 and workshop_hours > 0:
-                    cap_100 = (assigned * workshop_hours * 60.0) / (minutes_per * required)
+                if assigned > 0 and minutes_per >= 0 and required > 0 and workshop_hours > 0:
+                    cap_100 = (assigned * workshop_hours * 60.0) / (minutes_per * required) if minutes_per > 0 else 0.0
                 else:
                     cap_100 = 0.0
                 cap_planned = cap_100 * output_scale
@@ -234,6 +324,7 @@ if contract_type == "Production":
                 if errs:
                     st.error("Fix errors:\n- " + "\n- ".join(errs))
                 else:
+                    # Main (combined) table
                     results = calculate_production_contractual(
                         items, int(prisoner_output),
                         workshop_hours=float(workshop_hours),
@@ -246,13 +337,12 @@ if contract_type == "Production":
                         apply_vat=True, vat_rate=20.0,
                         num_prisoners=int(num_prisoners),
                         num_supervisors=int(num_supervisors),
+                        dev_rate=_dev_rate_from_support(employment_support),
                         pricing_mode=pricing_mode_key,
                         targets=targets if pricing_mode_key == "target" else None,
                         lock_overheads=lock_overheads,
                         employment_support=employment_support,
                     )
-
-                    # Main (legacy) table
                     display_cols = ["Item", "Output %", "Capacity (units/week)", "Units/week",
                                     "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
                                     "Monthly Total ex VAT (£)", "Monthly Total inc VAT (£)"]
@@ -260,39 +350,18 @@ if contract_type == "Production":
                         display_cols += ["Feasible", "Note"]
 
                     prod_df = pd.DataFrame([{
-                        k: (None if r.get(k) is None else (round(float(r.get(k)), 2) if isinstance(r.get(k), (int, float)) else r.get(k)))
+                        k: (None if r.get(k) is None else (round(float(r.get(k)), 4) if isinstance(r.get(k), (int, float)) else r.get(k)))
                         for k in display_cols
                     } for r in results])
+
                     st.session_state["prod_df"] = prod_df
-
-                    # Segregated costs (unit cost excludes instructor; instructor shown once monthly)
-                    seg_rows = []
-                    for r in results:
-                        seg_rows.append({
-                            "Item": r["Item"],
-                            "Output %": r["Output %"],
-                            "Capacity (units/week)": r["Capacity (units/week)"],
-                            "Units/week": r["Units/week"],
-                            "Unit Cost excl Instructor (£)": None if r.get("Unit Cost excl Instructor (£)") is None else round(float(r["Unit Cost excl Instructor (£)"]), 2),
-                            "Monthly Total (ex VAT £)": None if r.get("Monthly Total ex VAT (£)") is None else round(float(r["Monthly Total ex VAT (£)"]) - float(r.get("Monthly Instructor Share (£)", 0.0)), 2),
-                        })
-
-                    total_monthly_inst = sum(float(r.get("Monthly Instructor Share (£)", 0.0)) for r in results)
-                    if total_monthly_inst > 0:
-                        seg_rows.append({
-                            "Item": "Instructor Salary (monthly)",
-                            "Output %": "",
-                            "Capacity (units/week)": "",
-                            "Units/week": "",
-                            "Unit Cost excl Instructor (£)": "",
-                            "Monthly Total (ex VAT £)": round(total_monthly_inst, 2),
-                        })
-
-                    seg_df = pd.DataFrame(seg_rows, columns=[
-                        "Item", "Output %", "Capacity (units/week)", "Units/week",
-                        "Unit Cost excl Instructor (£)", "Monthly Total (ex VAT £)"
-                    ])
-                    st.session_state["prod_df_segregated"] = seg_df
+                    st.session_state["prod_items"] = items  # needed for segregated table
+                    st.session_state["prod_meta"] = {
+                        "pricing_mode_key": pricing_mode_key,
+                        "targets": targets if pricing_mode_key == "target" else [],
+                        "output_pct": int(prisoner_output),
+                        "dev_rate": _dev_rate_from_support(employment_support)
+                    }
 
     else:  # Ad-hoc
         num_lines = st.number_input("How many product lines are needed?", min_value=1, value=1, step=1, key="adhoc_num_lines")
@@ -305,18 +374,7 @@ if contract_type == "Production":
                 with c3: deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
                 c4, c5 = st.columns([1, 1])
                 with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
-
-                unit_choice = st.radio(
-                    "Input unit",
-                    ["Minutes", "Seconds"],
-                    index=0, horizontal=True, key=f"adhoc_unit_{i}"
-                )
-                if unit_choice == "Minutes":
-                    minutes_per_item = st.number_input("Minutes to make one", min_value=0.0, value=10.0, format="%.2f", key=f"adhoc_mins_{i}")
-                else:
-                    seconds_val = st.number_input("Seconds to make one", min_value=0.0, value=60.0, format="%.2f", key=f"adhoc_secs_{i}")
-                    minutes_per_item = float(seconds_val) / 60.0
-
+                with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=0.0, value=10.0, format="%.4f", key=f"adhoc_mins_{i}")
                 lines.append({
                     "name": (item_name.strip() or f"Item {i+1}") if isinstance(item_name, str) else f"Item {i+1}",
                     "units": int(units_requested),
@@ -331,7 +389,7 @@ if contract_type == "Production":
             for i, ln in enumerate(lines):
                 if ln["units"] <= 0: errs.append(f"Line {i+1}: Units requested must be > 0")
                 if ln["pris_per_item"] <= 0: errs.append(f"Line {i+1}: Prisoners to make one must be > 0")
-                if ln["mins_per_item"] <= 0: errs.append(f"Line {i+1}: Minutes to make one must be > 0")
+                if ln["mins_per_item"] < 0: errs.append(f"Line {i+1}: Minutes to make one cannot be negative")
             if errs:
                 st.error("Fix errors:\n- " + "\n- ".join(errs))
             else:
@@ -346,7 +404,7 @@ if contract_type == "Production":
                     region=region,
                     customer_type="Commercial",
                     apply_vat=True, vat_rate=20.0,
-                    dev_rate=0.0,
+                    dev_rate=_dev_rate_from_support(employment_support),
                     today=date.today(),
                     lock_overheads=lock_overheads,
                     employment_support=employment_support,
@@ -356,29 +414,189 @@ if contract_type == "Production":
                 else:
                     df, totals = build_adhoc_table(result)
                     st.session_state["prod_df"] = df
+                    st.session_state["prod_items"] = None
+                    st.session_state["prod_meta"] = None
 
-    # Render production results (both normal and segregated if present)
+    # ===== Results + Segregated + Downloads =====
     if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
-        df = st.session_state["prod_df"]
-        st.markdown("### Production — Summary")
+        df = st.session_state["prod_df"].copy()
+        # Hide instructor line if such appears (normally production table doesn’t have it)
+        if customer_covers_supervisors and "Item" in df.columns:
+            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        if "prod_df_segregated" in st.session_state and isinstance(st.session_state["prod_df_segregated"], pd.DataFrame):
-            st.markdown("### Production — Segregated Costs")
-            st.markdown(render_table_html(st.session_state["prod_df_segregated"]), unsafe_allow_html=True)
+        # Build segregated table (Contractual only)
+        seg_df = None
+        if st.session_state.get("prod_items") is not None:
+            items = st.session_state["prod_items"]
+            meta = st.session_state["prod_meta"] or {}
+            pricing_mode_key = meta.get("pricing_mode_key", "as-is")
+            targets = meta.get("targets", [])
+            output_pct = meta.get("output_pct", int(prisoner_output))
+            dev_rate = meta.get("dev_rate", _dev_rate_from_support(employment_support))
+            output_scale = float(output_pct) / 100.0
+
+            # Compute base instructor + overheads for segregation
+            # Instructor weekly total
+            if not customer_covers_supervisors:
+                inst_weekly_total = sum((s / 52.0) * (float(instructor_pct) / 100.0) for s in supervisor_salaries)
+            else:
+                inst_weekly_total = 0.0
+
+            # Overhead base (61%)
+            if customer_covers_supervisors:
+                # Shadow costs handled inside production61; here we only segregate using overhead total already included
+                # We replicate the same base used by main calc:
+                # choose highest if locked
+                if supervisor_salaries:
+                    highest = max(supervisor_salaries)
+                else:
+                    highest = 0.0
+                # when customer provides, lock_overheads uses highest of *provided* list only if asked;
+                # otherwise shadow band-3 used inside production61; segregation stays consistent by relying on share split.
+                overhead_base_weekly = ((highest if lock_overheads and highest > 0 else 0.0) / 52.0) * (float(instructor_pct) / 100.0)
+            else:
+                base = sum((s / 52.0) * (float(instructor_pct) / 100.0) for s in supervisor_salaries)
+                if lock_overheads and supervisor_salaries:
+                    base = (max(supervisor_salaries) / 52.0) * (float(instructor_pct) / 100.0)
+                overhead_base_weekly = base
+            overheads_weekly_total = overhead_base_weekly * 0.61
+            dev_weekly_total = overheads_weekly_total * dev_rate
+
+            denom = sum(int(it.get("assigned", 0)) * workshop_hours * 60.0 for it in items)
+            rows = []
+            inst_monthly = inst_weekly_total * 52.0 / 12.0
+            monthly_sum_excl_inst = 0.0
+
+            for idx, it in enumerate(items):
+                name = (it.get("name") or "").strip() or f"Item {idx+1}"
+                mins_per_unit = float(it.get("minutes", 0))
+                pris_required = int(it.get("required", 1))
+                pris_assigned = int(it.get("assigned", 0))
+
+                # Capacity
+                if pris_assigned > 0 and mins_per_unit >= 0 and pris_required > 0 and workshop_hours > 0:
+                    cap_100 = (pris_assigned * workshop_hours * 60.0) / (mins_per_unit * pris_required) if mins_per_unit > 0 else 0.0
+                else:
+                    cap_100 = 0.0
+                capacity_units = cap_100 * output_scale
+
+                # Units chosen (target or capacity)
+                if pricing_mode_key == "target":
+                    tgt = 0
+                    if targets and idx < len(targets):
+                        try: tgt = int(targets[idx])
+                        except Exception: tgt = 0
+                    units_for_pricing = float(tgt)
+                else:
+                    units_for_pricing = capacity_units
+
+                share = ((pris_assigned * workshop_hours * 60.0) / denom) if denom > 0 else 0.0
+                prisoner_weekly_item = pris_assigned * prisoner_salary
+                overheads_weekly_item = overheads_weekly_total * share
+                dev_weekly_item = dev_weekly_total * share
+
+                weekly_excl_inst = prisoner_weekly_item + overheads_weekly_item + dev_weekly_item
+                unit_cost_excl_inst = (weekly_excl_inst / units_for_pricing) if units_for_pricing > 0 else None
+                monthly_total_excl_inst = (units_for_pricing * unit_cost_excl_inst * 52.0 / 12.0) if unit_cost_excl_inst else None
+
+                monthly_sum_excl_inst += (monthly_total_excl_inst or 0.0)
+
+                rows.append({
+                    "Item": name,
+                    "Output %": int(output_pct),
+                    "Capacity (units/week)": 0 if capacity_units <= 0 else int(round(capacity_units)),
+                    "Units/week": 0 if units_for_pricing <= 0 else int(round(units_for_pricing)),
+                    "Unit Cost excl Instructor (£)": unit_cost_excl_inst,
+                    "Monthly Total excl Instructor ex VAT (£)": monthly_total_excl_inst,
+                })
+
+            # Add one instructor salary line (monthly) and grand total ex VAT (segregated)
+            rows.append({
+                "Item": "Instructor Salary (monthly)",
+                "Output %": "",
+                "Capacity (units/week)": "",
+                "Units/week": "",
+                "Unit Cost excl Instructor (£)": "",
+                "Monthly Total excl Instructor ex VAT (£)": inst_monthly,
+            })
+            rows.append({
+                "Item": "Grand Total (ex VAT)",
+                "Output %": "",
+                "Capacity (units/week)": "",
+                "Units/week": "",
+                "Unit Cost excl Instructor (£)": "",
+                "Monthly Total excl Instructor ex VAT (£)": monthly_sum_excl_inst + inst_monthly,
+            })
+
+            seg_df = pd.DataFrame(rows)
+
+        if seg_df is not None and not seg_df.empty:
+            st.markdown("### Segregated Costs")
+            st.markdown(render_table_html(seg_df), unsafe_allow_html=True)
+
+        # === Downloads (Production) ===
+        header_block = build_header_block(
+            uk_date=_uk_date(date.today()),
+            customer_name=customer_name,
+            prison_name=prison_choice,
+            region=region
+        )
+
+        # Include segregated table in the HTML (as an extra section)
+        extra_html = None
+        if seg_df is not None and not seg_df.empty:
+            extra_html = "<h3>Segregated Costs</h3>" + render_table_html(seg_df)
 
         c1, c2 = st.columns(2)
         with c1:
+            # Build flat CSV rows
+            rows = []
+            common = {
+                "Quote Type": "Production",
+                "Date": _uk_date(date.today()),
+                "Prison Name": prison_choice,
+                "Region": region,
+                "Customer Name": customer_name,
+                "Contract Type": "Production",
+                "Workshop Hours / week": workshop_hours,
+                "Prisoners Employed": num_prisoners,
+                "Prisoner Salary / week": prisoner_salary,
+                "Instructors Count": num_supervisors,
+                "Customer Provides Instructors": "Yes" if customer_covers_supervisors else "No",
+                "Instructor Allocation (%)": instructor_pct,
+                "Recommended Allocation (%)": recommended_pct,
+                "Labour Output (%)": prisoner_output,
+                "Lock Overheads to Highest": "Yes" if lock_overheads else "No",
+                "Employment Support": employment_support,
+                "Contracts Overseen": contracts,
+                "VAT Rate (%)": 20.0,
+            }
+            # One row per item in main table
+            for _, r in df.iterrows():
+                row = {**common}
+                for col in df.columns:
+                    row[f"Prod: {col}"] = r.get(col, "")
+                rows.append(row)
+
+            # If segregated present, add one more row per item with those columns
+            if seg_df is not None and not seg_df.empty:
+                for _, r in seg_df.iterrows():
+                    row = {**common}
+                    for col in seg_df.columns:
+                        row[f"Seg: {col}"] = r.get(col, "")
+                    rows.append(row)
+
             st.download_button(
                 "Download CSV (Production)",
-                data=export_csv_bytes(df),
+                data=export_csv_bytes_rows(rows),
                 file_name="production_quote.csv",
                 mime="text/csv"
             )
         with c2:
             st.download_button(
                 "Download PDF-ready HTML (Production)",
-                data=export_html(None, df, title="Production Quote"),
+                data=export_html(None, df, title="Production Quote", header_block=header_block, extra_note=extra_html),
                 file_name="production_quote.html",
                 mime="text/html"
             )
