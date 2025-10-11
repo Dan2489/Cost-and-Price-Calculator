@@ -7,7 +7,7 @@ from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from utils61 import (
     inject_govuk_css, sidebar_controls, fmt_currency,
     export_csv_bytes, export_html, render_table_html, adjust_table,
-    export_csv_single_row, build_header_block
+    export_csv_single_row, export_csv_bytes_rows, build_header_block
 )
 from production61 import (
     labour_minutes_budget,
