@@ -64,7 +64,7 @@ def sidebar_controls(default_output: int):
     with st.sidebar:
         st.header("Controls")
         lock_overheads = st.checkbox("Lock overheads to highest instructor", value=False)
-        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, 100, step=5)
+        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, 100, step=1)
         prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output, step=5)
     return lock_overheads, instructor_pct, prisoner_output
 
