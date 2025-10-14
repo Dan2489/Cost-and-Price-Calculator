@@ -286,3 +286,7 @@ if contract_type=="Production":
     budget_raw=labour_minutes_budget(int(num_prisoners),float(workshop_hours))
     budget_planned=budget_raw*output_scale
     st.info(f"Available Labour minutes per week @ {prisoner_output}% = **{budget_planned:,.0f} minutes**.")
+if contract_type == "Production":
+    st.markdown("---")
+    st.subheader("Production settings")
+    ...
