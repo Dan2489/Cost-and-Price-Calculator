@@ -102,7 +102,7 @@ def validate_inputs():
 def _get_base_total(df: pd.DataFrame) -> float:
     try:
         if {"Item", "Amount (£)"}.issubset(df.columns):
-            mask = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False)
+            mask = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False, regex=False)
             if mask.any():
                 val = pd.to_numeric(df.loc[mask, "Amount (£)"], errors="coerce").dropna()
                 if not val.empty:
@@ -143,7 +143,7 @@ def _apply_benefits_discount_host(df_in: pd.DataFrame, discount: float, original
 
     # Original amounts (pre-discount)
     def _orig(needle):
-        m = original_df["Item"].astype(str).str.contains(needle, case=False, na=False)
+        m = original_df["Item"].astype(str).str.contains(needle, case=False, na=False, regex=False)
         return _num(original_df.loc[m, "Amount (£)"].iloc[0]) if m.any() else 0.0
 
     inst_orig = _orig("Instructor Salary")
@@ -154,29 +154,33 @@ def _apply_benefits_discount_host(df_in: pd.DataFrame, discount: float, original
 
     # Scale rows in df to (1 - discount)
     for needle in ["Instructor Salary", "Overheads (61%"]:
-        m = df["Item"].astype(str).str.contains(needle, case=False, na=False)
+        m = df["Item"].astype(str).str.contains(needle, case=False, na=False, regex=False)
         if m.any():
             idx = df.index[m][0]
-            old = _num(df.at[idx, "Amount (£)"])
-            # Replace with discounted original to avoid cascading rounding
-            new_val = (inst_orig if "Instructor" in needle else over_orig) * (1.0 - discount)
+            # Replace with discounted original to avoid compounding
+            base = inst_orig if "Instructor" in needle else over_orig
+            new_val = base * (1.0 - discount)
             df.at[idx, "Amount (£)"] = new_val
 
             # Insert a reduction row right after
             red_label = "Benefits Reduction – Instructor (10%)" if "Instructor" in needle else "Benefits Reduction – Overheads (10%)"
-            insert_idx = idx + 0.5  # temp
             new_row = pd.DataFrame([{
                 "Item": red_label,
                 "Amount (£)": - (inst_red if "Instructor" in needle else over_red)
             }])
-            # Insert by splitting
-            df = pd.concat([df.loc[:idx], new_row, df.loc[idx+1:]], ignore_index=True)
+            # Insert by position
+            top = df.iloc[:idx+1]
+            bottom = df.iloc[idx+1:]
+            df = pd.concat([top, new_row, bottom], ignore_index=True)
 
     # Recompute Subtotal (sum of all rows except VAT & Grand Total if present)
-    mask_sum = ~df["Item"].astype(str).str.contains("VAT|Grand Total|Subtotal", case=False, na=False)
+    mask_sum = ~df["Item"].astype(str).str.contains("VAT", case=False, na=False, regex=False) & \
+               ~df["Item"].astype(str).str.contains("Grand Total", case=False, na=False, regex=False) & \
+               ~df["Item"].astype(str).str.contains("Subtotal", case=False, na=False, regex=False)
     subtotal = df.loc[mask_sum, "Amount (£)"].map(_num).sum()
-    # Update Subtotal
-    m_sub = df["Item"].astype(str).str.contains("Subtotal", case=False, na=False)
+
+    # Update/insert Subtotal
+    m_sub = df["Item"].astype(str).str.contains("Subtotal", case=False, na=False, regex=False)
     if m_sub.any():
         df.at[df.index[m_sub][0], "Amount (£)"] = subtotal
     else:
@@ -185,14 +189,14 @@ def _apply_benefits_discount_host(df_in: pd.DataFrame, discount: float, original
     # VAT row
     vat_rate = 0.20
     vat = subtotal * vat_rate
-    m_vat = df["Item"].astype(str).str.contains("VAT", case=False, na=False)
+    m_vat = df["Item"].astype(str).str.contains("VAT", case=False, na=False, regex=False)
     if m_vat.any():
         df.at[df.index[m_vat][0], "Amount (£)"] = vat
     else:
         df = pd.concat([df, pd.DataFrame([{"Item": "VAT (20%)", "Amount (£)": vat}])], ignore_index=True)
 
     # Grand Total
-    m_gt = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False)
+    m_gt = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False, regex=False)
     if m_gt.any():
         df.at[df.index[m_gt][0], "Amount (£)"] = subtotal + vat
     else:
@@ -253,7 +257,7 @@ if contract_type == "Host":
         # ------- Host CSV: single flat row (inputs + results) -------
         def _grab_amount(needle: str) -> float:
             try:
-                m = df["Item"].astype(str).str.contains(needle, case=False, na=False)
+                m = df["Item"].astype(str).str.contains(needle, case=False, na=False, regex=False)
                 if m.any():
                     raw = str(df.loc[m, "Amount (£)"].iloc[-1]).replace("£", "").replace(",", "")
                     return float(raw)
@@ -424,7 +428,7 @@ if contract_type == "Production":
                         targets=targets if pricing_mode_key == "target" else None,
                         lock_overheads=False,
                         employment_support=employment_support,
-                        benefits_discount=instructor_discount,  # if your prod function accepts it; else handled below
+                        benefits_discount=instructor_discount,  # if supported
                     )
                     display_cols = ["Item", "Output %", "Capacity (units/week)", "Units/week",
                                     "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
@@ -506,7 +510,7 @@ if contract_type == "Production":
     if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
         df = st.session_state["prod_df"].copy()
         if customer_covers_supervisors and "Item" in df.columns:
-            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
+            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False, regex=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
         # Build segregated table (Contractual only)
