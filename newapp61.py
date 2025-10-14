@@ -1,3 +1,4 @@
+# newapp61.py
 import streamlit as st
 import pandas as pd
 from datetime import date
@@ -6,8 +7,8 @@ from config61 import CFG
 from tariff61 import PRISON_TO_REGION, SUPERVISOR_PAY
 from utils61 import (
     inject_govuk_css, sidebar_controls, fmt_currency,
-    export_csv_bytes, export_html, render_table_html, adjust_table,
-    export_csv_single_row, export_csv_bytes_rows, build_header_block
+    export_html, render_table_html, build_header_block,
+    export_csv_single_row, export_csv_bytes_rows
 )
 from production61 import (
     labour_minutes_budget,
@@ -25,10 +26,15 @@ inject_govuk_css()
 st.title("Cost and Price Calculator")
 
 # -------------------------------
-# Sidebar
+# Sidebar (back-compat: supports 1-value or 3-value return)
 # -------------------------------
-# We only use prisoner_output from the sidebar; we ignore the instructor slider and lock toggle.
-_lock_overheads_unused, _instructor_pct_unused, prisoner_output = sidebar_controls(CFG.GLOBAL_OUTPUT_DEFAULT)
+_sc = sidebar_controls(CFG.GLOBAL_OUTPUT_DEFAULT)
+if isinstance(_sc, tuple):
+    # Old signature: (lock_overheads, instructor_pct, prisoner_output)
+    prisoner_output = _sc[-1]
+else:
+    # New signature: only output %
+    prisoner_output = _sc
 
 # -------------------------------
 # Base inputs
@@ -45,8 +51,9 @@ workshop_hours = st.number_input("How many hours is the workshop open per week?"
 num_prisoners = st.number_input("How many prisoners employed per week?", min_value=0, step=1)
 prisoner_salary = st.number_input("Average prisoner salary per week (£)", min_value=0.0, format="%.2f")
 
-# Instructor inputs
-num_supervisors = st.number_input("How many instructors are required at full contract capacity?", min_value=1, step=1)
+# Instructor inputs (title/grade and COUNT only)
+num_supervisors = st.number_input("How many instructors are required at full contract capacity.", min_value=1, step=1)
+
 customer_covers_supervisors = st.checkbox("Customer provides Instructor(s)?", value=False)
 
 supervisor_salaries = []
@@ -66,15 +73,36 @@ employment_support = st.selectbox(
     ["None", "Employment on release/RoTL", "Post release", "Both"],
 )
 
-# Additional prison benefits (optional 10% reduction on instructor salary)
+# NEW: Additional benefits -> 10% discount to Instructor & Overheads
 benefits_yes = st.checkbox("Any additional prison benefits that you feel warrant a further reduction?")
-benefits_note = ""
+benefits_text = ""
 if benefits_yes:
-    benefits_note = st.text_area("Please explain the additional benefits", max_chars=1000)
+    benefits_text = st.text_area("Describe the benefits")
 
 # -------------------------------
-# Validation
+# Derived/Helpers
 # -------------------------------
+def _uk_date(d: date) -> str:
+    return d.strftime("%d/%m/%Y")
+
+def _dev_rate_from_support(s: str) -> float:
+    if s == "None":
+        return 0.20
+    if s in ("Employment on release/RoTL", "Post release"):
+        return 0.10
+    return 0.00
+
+def _recommended_pct(hours: float, contracts_count: int) -> float:
+    try:
+        if hours > 0 and contracts_count > 0:
+            return min(100.0, round((hours / 37.5) * (1.0 / contracts_count) * 100.0, 1))
+    except Exception:
+        pass
+    return 0.0
+
+# Instructor % now ALWAYS derived (and never shown)
+effective_instructor_pct = _recommended_pct(workshop_hours, int(contracts))
+
 def validate_inputs():
     errors = []
     if prison_choice == "Select": errors.append("Select prison")
@@ -87,163 +115,106 @@ def validate_inputs():
         errors.append("Choose a title for each instructor")
     return errors
 
-# -------------------------------
-# Helpers
-# -------------------------------
-def _get_base_total(df: pd.DataFrame) -> float:
+# Generic row-search (safe: no regex)
+def _grab_amount(df: pd.DataFrame, needle: str) -> float:
     try:
         if {"Item", "Amount (£)"}.issubset(df.columns):
-            mask = df["Item"].astype(str).str.contains("Grand Total", case=False, na=False)
-            if mask.any():
-                val = pd.to_numeric(df.loc[mask, "Amount (£)"], errors="coerce").dropna()
-                if not val.empty:
-                    return float(val.iloc[-1])
-        for col in ["Monthly Total inc VAT (£)", "Monthly Total (inc VAT £)", "Monthly Total (£)", "Monthly Total ex VAT (£)"]:
-            if col in df.columns:
-                return float(pd.to_numeric(df[col], errors="coerce").fillna(0).sum())
+            m = df["Item"].astype(str).str.contains(needle, case=False, na=False, regex=False)
+            if m.any():
+                raw = str(df.loc[m, "Amount (£)"].iloc[-1]).replace("£", "").replace(",", "")
+                return float(raw)
     except Exception:
         pass
     return 0.0
 
-def _dev_rate_from_support(s: str) -> float:
-    if s == "None":
-        return 0.20
-    if s in ("Employment on release/RoTL", "Post release"):
-        return 0.10
-    return 0.00
-
-def _uk_date(d: date) -> str:
-    return d.strftime("%d/%m/%Y")
-
-def _calc_instructor_pct_from_hours_contracts(hours: float, contracts: int) -> float:
-    """Return % allocation based on hours/37.5 divided by number of contracts, capped at 100."""
-    if hours <= 0 or contracts <= 0:
-        return 0.0
-    return min(100.0, (hours / 37.5) * (1.0 / float(contracts)) * 100.0)
-
-def _find_first_amount(df: pd.DataFrame, contains_any: list) -> float:
-    """Find first row whose Item contains any of the substrings (case-insensitive, no regex) and return numeric amount."""
-    try:
-        items = df["Item"].astype(str).str.lower()
-        for needle in contains_any:
-            m = items.str.contains(needle.lower(), case=False, regex=False, na=False)
-            if m.any():
-                raw = str(df.loc[m, "Amount (£)"].iloc[-1]).replace("£", "").replace(",", "").strip()
-                return float(raw)
-    except Exception:
-        return 0.0
-    return 0.0
-
-def _set_amount(df: pd.DataFrame, contains_any: list, new_val: float, label_replace: dict = None, add_if_missing: str = None, position: int = None):
-    """
-    Update the first matching row amount. If not found and add_if_missing provided, append a new row.
-    label_replace: dict of {old_substring: new_substring} to replace in Item text for display (no regex).
-    """
-    if df is None or df.empty:
+# Apply 10% Benefits discount to Instructor & Overheads in a Host quote table
+def _apply_benefits_discount_host(df: pd.DataFrame, instructor_discount: float) -> pd.DataFrame:
+    """Returns a new dataframe with 10% reductions lines added (red) and totals adjusted."""
+    if df is None or df.empty or instructor_discount <= 0:
         return df
-    idx = -1
-    items = df["Item"].astype(str)
-    for i, it in enumerate(items):
-        low = it.lower()
-        for needle in contains_any:
-            if needle.lower() in low:
-                idx = i
+
+    # Read original rows (safe match)
+    inst = _grab_amount(df, "Instructor Salary")
+    # Accept either 'Overheads' or 'Overheads (61%' in legacy exports
+    over = _grab_amount(df, "Overheads (61%")
+    if over == 0.0:
+        over = _grab_amount(df, "Overheads")
+
+    inst_red = round(inst * instructor_discount, 2)
+    over_red = round(over * instructor_discount, 2)
+
+    # Build new table: insert two negative lines just after Instructor & Overheads
+    out = []
+    for _, r in df.iterrows():
+        label = str(r.get("Item", ""))
+        out.append(dict(r))
+        if label.lower().startswith("instructor salary"):
+            out.append({"Item": f"Benefits Reduction - Instructor (10%)", "Amount (£)": -inst_red})
+        if label.lower().startswith("overheads"):
+            out.append({"Item": f"Benefits Reduction - Overheads (10%)", "Amount (£)": -over_red})
+
+    new_df = pd.DataFrame(out)
+
+    # Recompute Subtotal / Grand Total if present
+    # (sum of all non-VAT rows up to Subtotal, then Grand Total incl VAT if present)
+    # We keep simple: when we see a row Subtotal/Grand Total we replace their numbers with recomputed values.
+    def _sum_before(label: str) -> float:
+        s = 0.0
+        for _, rr in new_df.iterrows():
+            it = str(rr.get("Item", ""))
+            val = rr.get("Amount (£)")
+            if isinstance(val, str):
+                try: val = float(val.replace("£", "").replace(",", ""))
+                except Exception: val = 0.0
+            val = 0.0 if pd.isna(val) else float(val)
+            if it.lower().startswith(label.lower()):
                 break
-        if idx >= 0: break
+            # exclude VAT lines from the base
+            if "vat" in it.lower():
+                continue
+            s += val
+        return s
 
-    if idx >= 0:
-        df.at[idx, "Amount (£)"] = new_val
-        # display substitution (remove (61%) etc)
-        if label_replace:
-            new_item = df.at[idx, "Item"]
-            for old, new in label_replace.items():
-                new_item = new_item.replace(old, new)
-            df.at[idx, "Item"] = new_item
-    else:
-        if add_if_missing:
-            row = {"Item": add_if_missing, "Amount (£)": new_val}
-            if position is not None and 0 <= position <= len(df):
-                top = df.iloc[:position].copy()
-                bottom = df.iloc[position:].copy()
-                df = pd.concat([top, pd.DataFrame([row]), bottom], ignore_index=True)
-            else:
-                df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    return df
+    # Update Subtotal
+    st_mask = new_df["Item"].astype(str).str.contains("Subtotal", case=False, na=False, regex=False)
+    if st_mask.any():
+        subtotal = round(_sum_before("Subtotal"), 2)
+        new_df.loc[st_mask, "Amount (£)"] = subtotal
 
-def _recompute_totals_host(df: pd.DataFrame) -> pd.DataFrame:
-    """Recompute Subtotal, VAT, Grand Total based on current row values."""
-    # Subtotal is sum of all positive charges plus revised development (if present) minus visible discounts.
-    # We will compute: Prisoner Wages + Instructor Salary + Overheads + Revised Development (if exists else Development charge) + other positive lines (excluding VAT/Grand)
-    if df is None or df.empty:
-        return df
+    # Update Grand Total (ex VAT / inc VAT variants)
+    gt_mask = new_df["Item"].astype(str).str.contains("Grand Total", case=False, na=False, regex=False)
+    if gt_mask.any():
+        # If a separate VAT line exists, just recompute as subtotal + VAT line(s)
+        vat_mask = new_df["Item"].astype(str).str.contains("VAT", case=False, na=False, regex=False)
+        if vat_mask.any():
+            # First recompute VAT from the new subtotal if there is a single VAT line with % in label
+            # Otherwise sum existing VAT lines
+            subtotal = round(_sum_before("Grand Total"), 2)
+            vat_total = 0.0
+            for _, rr in new_df[vat_mask].iterrows():
+                it = str(rr["Item"])
+                amt = rr["Amount (£)"]
+                if isinstance(amt, str):
+                    try: amt = float(amt.replace("£", "").replace(",", ""))
+                    except Exception: amt = 0.0
+                amt = 0.0 if pd.isna(amt) else float(amt)
+                # Try to parse a "20%" style from the label
+                pct = None
+                for token in it.replace("(", " ").replace(")", " ").split():
+                    if token.endswith("%"):
+                        try: pct = float(token.strip("%")) / 100.0
+                        except Exception: pct = None
+                if pct is not None:
+                    vat_total += round(subtotal * pct, 2)
+                else:
+                    vat_total += amt
+            grand = round(subtotal + vat_total, 2)
+        else:
+            # No VAT rows: treat Grand Total as ex VAT and recompute as subtotal
+            grand = round(_sum_before("Grand Total"), 2)
+        new_df.loc[gt_mask, "Amount (£)"] = grand
 
-    # Identify amounts
-    pris = _find_first_amount(df, ["prisoner wages"])
-    inst = _find_first_amount(df, ["instructor salary"])
-    over = _find_first_amount(df, ["overheads (61", "overheads"])  # match both
-    dev = _find_first_amount(df, ["revised development charge"])
-    if dev == 0.0:
-        dev = _find_first_amount(df, ["development charge (before", "development charge"])  # fallback
-
-    red_dev = _find_first_amount(df, ["reduction"])  # visible dev reduction (may be 0)
-    addl_ben = _find_first_amount(df, ["additional benefits discount"])
-
-    # Compute subtotal ex VAT
-    subtotal = pris + inst + over + dev
-    # explicit discounts already shown as separate lines are not added
-    # VAT and Grand Total
-    vat = round(subtotal * 0.20, 2)
-    grand = round(subtotal + vat, 2)
-
-    df = _set_amount(df, ["subtotal"], round(subtotal, 2), add_if_missing="Subtotal (£/month)")
-    df = _set_amount(df, ["vat"], vat, add_if_missing="VAT (£/month)")
-    df = _set_amount(df, ["grand total"], grand, add_if_missing="Grand Total (£/month)")
-    return df
-
-def _apply_benefits_discount_host(df: pd.DataFrame, discount_rate: float) -> pd.DataFrame:
-    """
-    Apply a % discount to Instructor Salary and Overheads proportionally.
-    Insert a red 'Additional benefits discount (Instructor)' line showing the discount amount.
-    """
-    if df is None or df.empty or discount_rate <= 0:
-        return df.copy()
-
-    out = df.copy()
-
-    # Current values
-    inst_orig = _find_first_amount(out, ["instructor salary"])
-    over_orig = _find_first_amount(out, ["overheads (61", "overheads"])
-
-    inst_disc_amt = round(inst_orig * discount_rate, 2)
-    inst_new = round(inst_orig - inst_disc_amt, 2)
-
-    # Overheads are proportional to instructor base in this model; reduce by same rate
-    over_disc_amt = round(over_orig * discount_rate, 2)
-    over_new = round(over_orig - over_disc_amt, 2)
-
-    # Update lines (also remove "(61%)" in display)
-    out = _set_amount(out, ["instructor salary"], inst_new)
-    out = _set_amount(out, ["overheads (61", "overheads"], over_new, label_replace={"(61%)": ""})
-
-    # Add/Update explicit benefits discount line (red)
-    benefit_label = "Additional benefits discount (Instructor) — 10%"
-    # If a discount line exists already, update it; else append just before Subtotal (try to insert near existing discounts)
-    # Find position of Subtotal to insert before
-    insert_pos = None
-    try:
-        m = out["Item"].astype(str).str.lower().str.contains("subtotal", regex=False)
-        if m.any():
-            insert_pos = int(m.idxmax())
-    except Exception:
-        insert_pos = None
-
-    out = _set_amount(out, ["additional benefits discount"], inst_disc_amt, add_if_missing=benefit_label, position=insert_pos)
-
-    # Make reductions red in display by wrapping the label later when rendering
-
-    # Recompute totals (ex VAT, VAT, Grand)
-    out = _recompute_totals_host(out)
-    return out
+    return new_df
 
 # -------------------------------
 # HOST
@@ -254,9 +225,6 @@ if contract_type == "Host":
         if errs:
             st.error("Fix errors:\n- " + "\n- ".join(errs))
         else:
-            # Instructor allocation % derived from hours/contracts
-            effective_instructor_pct = _calc_instructor_pct_from_hours_contracts(workshop_hours, int(contracts))
-
             host_df, ctx = host61.generate_host_quote(
                 workshop_hours=workshop_hours,
                 num_prisoners=num_prisoners,
@@ -267,34 +235,32 @@ if contract_type == "Host":
                 region=region,
                 contracts=contracts,
                 employment_support=employment_support,
-                instructor_allocation=effective_instructor_pct,  # derived
-                lock_overheads=False,  # no lock behaviour
+                # Use derived instructor %
+                instructor_allocation=effective_instructor_pct,
+                # We still pass lock_overheads if your host61 uses it; default False when not present
+                lock_overheads=False,
             )
-            # Apply benefits discount if chosen (10% off Instructor & proportional Overheads)
+            # Remove “(61%)” in label for display consistency
+            if "Item" in host_df.columns:
+                host_df["Item"] = host_df["Item"].astype(str).str.replace("Overheads (61%)", "Overheads", regex=False)
+
+            # Apply 10% benefits reduction to Instructor & Overheads if selected
             if benefits_yes:
                 host_df = _apply_benefits_discount_host(host_df, 0.10)
+
             st.session_state["host_df"] = host_df
 
     if "host_df" in st.session_state:
         df = st.session_state["host_df"].copy()
-
-        # If customer covers instructors, strip that line from display
         if customer_covers_supervisors and "Item" in df.columns:
-            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
+            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False, regex=False)]
 
-        # Remove "(61%)" from Overheads label for display
-        if "Item" in df.columns:
-            df["Item"] = df["Item"].astype(str).str.replace("(61%)", "", regex=False)
-
-        # Style reductions in red (Development reduction + Additional benefits discount)
+        # Make reductions red
         if "Item" in df.columns:
             df_display = df.copy()
-            def _style_reduce(x: str) -> str:
-                s = str(x)
-                if "reduction" in s.lower() or "additional benefits discount" in s.lower():
-                    return f"<span style='color:#d4351c'>{s}</span>"
-                return s
-            df_display["Item"] = df_display["Item"].apply(_style_reduce)
+            df_display["Item"] = df_display["Item"].apply(
+                lambda x: f"<span style='color:red'>{x}</span>" if "Reduction" in str(x) else x
+            )
             st.markdown(render_table_html(df_display), unsafe_allow_html=True)
         else:
             st.markdown(render_table_html(df), unsafe_allow_html=True)
@@ -306,17 +272,8 @@ if contract_type == "Host":
             prison_name=prison_choice,
             region=region
         )
-        # Append benefits note if present
-        if benefits_yes and benefits_note.strip():
-            header_block += f"<p><strong>Additional prison benefits noted:</strong> {benefits_note.strip()}</p>"
 
-        # ------- Host CSV: single flat row (inputs + results) -------
         source_df = st.session_state["host_df"].copy()
-
-        def _grab_amount(contains_any: list) -> float:
-            return _find_first_amount(source_df, contains_any)
-
-        effective_instructor_pct_csv = _calc_instructor_pct_from_hours_contracts(workshop_hours, int(contracts))
 
         common = {
             "Quote Type": "Host",
@@ -330,26 +287,24 @@ if contract_type == "Host":
             "Prisoner Salary / week": prisoner_salary,
             "Instructors Count": num_supervisors,
             "Customer Provides Instructors": "Yes" if customer_covers_supervisors else "No",
-            "Instructor Allocation (%)": round(effective_instructor_pct_csv, 1),
-            "Lock Overheads to Highest": "No",
+            "Instructor Allocation (%)": effective_instructor_pct,
             "Employment Support": employment_support,
             "Contracts Overseen": contracts,
+            "Additional Prison Benefits?": "Yes" if benefits_yes else "No",
+            "Benefits Notes": benefits_text,
             "VAT Rate (%)": 20.0,
-            "Additional Benefits Applied": "Yes" if benefits_yes else "No",
-            "Additional Benefits Note": benefits_note.strip() if benefits_yes else "",
         }
 
         amounts = {
-            "Host: Prisoner wages (£/month)": _grab_amount(["prisoner wages"]),
-            "Host: Instructor Salary (£/month)": _grab_amount(["instructor salary"]),
-            "Host: Overheads (£/month)": _grab_amount(["overheads (61", "overheads"]),
-            "Host: Development charge (£/month)": _grab_amount(["development charge (before", "development charge"]) - _grab_amount(["reduction"]),
-            "Host: Development Reduction (£/month)": _grab_amount(["reduction"]),
-            "Host: Revised Development (£/month)": _grab_amount(["revised development charge"]),
-            "Host: Additional benefits discount (£/month)": _grab_amount(["additional benefits discount"]),
-            "Host: Subtotal (£/month)": _grab_amount(["subtotal"]),
-            "Host: VAT (£/month)": _grab_amount(["vat"]),
-            "Host: Grand Total (£/month)": _grab_amount(["grand total"]),
+            "Host: Prisoner wages (£/month)": _grab_amount(source_df, "Prisoner Wages"),
+            "Host: Instructor Salary (£/month)": _grab_amount(source_df, "Instructor Salary"),
+            "Host: Overheads (£/month)": _grab_amount(source_df, "Overheads"),
+            "Host: Development charge (£/month)": _grab_amount(source_df, "Development charge"),
+            "Host: Development Reduction (£/month)": _grab_amount(source_df, "Reduction"),
+            "Host: Development Revised (£/month)": _grab_amount(source_df, "Revised development charge"),
+            "Host: Subtotal (£/month)": _grab_amount(source_df, "Subtotal"),
+            "Host: VAT (£/month)": _grab_amount(source_df, "VAT"),
+            "Host: Grand Total (£/month)": _grab_amount(source_df, "Grand Total"),
         }
 
         host_csv = export_csv_bytes_rows([{**common, **amounts}])
@@ -451,14 +406,12 @@ if contract_type == "Production":
                 if errs:
                     st.error("Fix errors:\n- " + "\n- ".join(errs))
                 else:
-                    # Derived instructor allocation (no slider)
-                    effective_instructor_pct = _calc_instructor_pct_from_hours_contracts(workshop_hours, int(contracts))
-
                     results = calculate_production_contractual(
                         items, int(prisoner_output),
                         workshop_hours=float(workshop_hours),
                         prisoner_salary=float(prisoner_salary),
                         supervisor_salaries=supervisor_salaries,
+                        # use derived instructor % (no slider)
                         effective_pct=float(effective_instructor_pct),
                         customer_covers_supervisors=customer_covers_supervisors,
                         region=region,
@@ -469,8 +422,9 @@ if contract_type == "Production":
                         dev_rate=_dev_rate_from_support(employment_support),
                         pricing_mode=pricing_mode_key,
                         targets=targets if pricing_mode_key == "target" else None,
-                        lock_overheads=False,  # no lock behaviour
+                        lock_overheads=False,
                         employment_support=employment_support,
+                        # Production reductions handled in the pricing functions as before
                     )
                     display_cols = ["Item", "Output %", "Capacity (units/week)", "Units/week",
                                     "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
@@ -489,12 +443,10 @@ if contract_type == "Production":
                         "pricing_mode_key": pricing_mode_key,
                         "targets": targets if pricing_mode_key == "target" else [],
                         "output_pct": int(prisoner_output),
-                        "dev_rate": _dev_rate_from_support(employment_support),
-                        "effective_instructor_pct": effective_instructor_pct,
-                        "benefits": benefits_yes
+                        "dev_rate": _dev_rate_from_support(employment_support)
                     }
 
-    else:  # Ad-hoc
+    else:  # Ad-hoc unchanged (uses derived instructor % internally)
         num_lines = st.number_input("How many product lines are needed?", min_value=1, value=1, step=1, key="adhoc_num_lines")
         lines = []
         for i in range(int(num_lines)):
@@ -524,8 +476,6 @@ if contract_type == "Production":
             if errs:
                 st.error("Fix errors:\n- " + "\n- ".join(errs))
             else:
-                # Derived instructor allocation for ad-hoc as well
-                effective_instructor_pct = _calc_instructor_pct_from_hours_contracts(workshop_hours, int(contracts))
                 result = calculate_adhoc(
                     lines, int(prisoner_output),
                     workshop_hours=float(workshop_hours),
@@ -546,8 +496,6 @@ if contract_type == "Production":
                     st.error(result["feasibility"]["reason"])
                 else:
                     df, totals = build_adhoc_table(result)
-
-                    # If benefits apply, add a visible discount line on the totals like we do for host (for parity we keep only in segregated below)
                     st.session_state["prod_df"] = df
                     st.session_state["prod_items"] = None
                     st.session_state["prod_meta"] = None
@@ -556,127 +504,19 @@ if contract_type == "Production":
     if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
         df = st.session_state["prod_df"].copy()
         if customer_covers_supervisors and "Item" in df.columns:
-            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
+            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False, regex=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Build segregated table (Contractual only)
-        seg_df = None
-        if st.session_state.get("prod_items") is not None:
-            items = st.session_state["prod_items"]
-            meta = st.session_state["prod_meta"] or {}
-            pricing_mode_key = meta.get("pricing_mode_key", "as-is")
-            targets = meta.get("targets", [])
-            output_pct = meta.get("output_pct", int(prisoner_output))
-            dev_rate = meta.get("dev_rate", _dev_rate_from_support(employment_support))
-            effective_instructor_pct = float(meta.get("effective_instructor_pct", _calc_instructor_pct_from_hours_contracts(workshop_hours, int(contracts))))
-            benefits_applied = bool(meta.get("benefits", benefits_yes))
-            output_scale2 = float(output_pct) / 100.0
-
-            # Weekly instructor cost (apply benefits discount here if chosen)
-            if not customer_covers_supervisors:
-                inst_weekly_total = sum((s / 52.0) * (effective_instructor_pct / 100.0) for s in supervisor_salaries)
-                if benefits_applied:
-                    inst_weekly_total *= 0.90  # 10% off
-            else:
-                inst_weekly_total = 0.0
-
-            # Overhead base weekly equals instructor weekly base (no lock behaviour)
-            if not customer_covers_supervisors:
-                base = sum((s / 52.0) * (effective_instructor_pct / 100.0) for s in supervisor_salaries)
-                if benefits_applied:
-                    base *= 0.90
-                overhead_base_weekly = base
-            else:
-                overhead_base_weekly = 0.0
-
-            overheads_weekly_total = overhead_base_weekly * 0.61
-            dev_weekly_total = overheads_weekly_total * dev_rate
-
-            denom = sum(int(it.get("assigned", 0)) * workshop_hours * 60.0 for it in items)
-            rows = []
-            inst_monthly = inst_weekly_total * 52.0 / 12.0
-            monthly_sum_excl_inst = 0.0
-
-            for idx, it in enumerate(items):
-                name = (it.get("name") or "").strip() or f"Item {idx+1}"
-                mins_per_unit = float(it.get("minutes", 0))
-                pris_required = int(it.get("required", 1))
-                pris_assigned = int(it.get("assigned", 0))
-
-                if pris_assigned > 0 and mins_per_unit >= 0 and pris_required > 0 and workshop_hours > 0:
-                    cap_100 = (pris_assigned * workshop_hours * 60.0) / (mins_per_unit * pris_required) if mins_per_unit > 0 else 0.0
-                else:
-                    cap_100 = 0.0
-                capacity_units = cap_100 * output_scale2
-
-                if pricing_mode_key == "target":
-                    tgt = 0
-                    if targets and idx < len(targets):
-                        try: tgt = int(targets[idx])
-                        except Exception: tgt = 0
-                    units_for_pricing = float(tgt)
-                else:
-                    units_for_pricing = capacity_units
-
-                share = ((pris_assigned * workshop_hours * 60.0) / denom) if denom > 0 else 0.0
-
-                prisoner_weekly_item = pris_assigned * prisoner_salary
-                overheads_weekly_item = overheads_weekly_total * share
-                dev_weekly_item = dev_weekly_total * share
-
-                weekly_excl_inst = prisoner_weekly_item + overheads_weekly_item + dev_weekly_item
-                unit_cost_excl_inst = (weekly_excl_inst / units_for_pricing) if units_for_pricing > 0 else None
-                monthly_total_excl_inst = (units_for_pricing * unit_cost_excl_inst * 52.0 / 12.0) if unit_cost_excl_inst else None
-
-                monthly_sum_excl_inst += (monthly_total_excl_inst or 0.0)
-
-                rows.append({
-                    "Item": name,
-                    "Output %": int(output_pct),
-                    "Capacity (units/week)": 0 if capacity_units <= 0 else int(round(capacity_units)),
-                    "Units/week": 0 if units_for_pricing <= 0 else int(round(units_for_pricing)),
-                    "Unit Cost excl Instructor (£)": unit_cost_excl_inst,
-                    "Monthly Total excl Instructor ex VAT (£)": monthly_total_excl_inst,
-                })
-
-            rows.append({
-                "Item": "Instructor Salary (monthly)",
-                "Output %": "",
-                "Capacity (units/week)": "",
-                "Units/week": "",
-                "Unit Cost excl Instructor (£)": "",
-                "Monthly Total excl Instructor ex VAT (£)": inst_monthly,
-            })
-            rows.append({
-                "Item": "Grand Total (ex VAT)",
-                "Output %": "",
-                "Capacity (units/week)": "",
-                "Units/week": "",
-                "Unit Cost excl Instructor (£)": "",
-                "Monthly Total excl Instructor ex VAT (£)": monthly_sum_excl_inst + inst_monthly,
-            })
-
-            seg_df = pd.DataFrame(rows)
-
-        if seg_df is not None and not seg_df.empty:
-            st.markdown("### Segregated Costs")
-            st.markdown(render_table_html(seg_df), unsafe_allow_html=True)
-
-        # === Downloads (Production) ===
+        # Downloads
         header_block = build_header_block(
             uk_date=_uk_date(date.today()),
             customer_name=customer_name,
             prison_name=prison_choice,
             region=region
         )
-        # Append benefits note if present
-        if benefits_yes and benefits_note.strip():
-            header_block += f"<p><strong>Additional prison benefits noted:</strong> {benefits_note.strip()}</p>"
 
         c1, c2 = st.columns(2)
         with c1:
-            # Single-row CSV including segregated section
-            effective_instructor_pct_csv = _calc_instructor_pct_from_hours_contracts(workshop_hours, int(contracts))
             common = {
                 "Quote Type": "Production",
                 "Date": _uk_date(date.today()),
@@ -689,15 +529,15 @@ if contract_type == "Production":
                 "Prisoner Salary / week": prisoner_salary,
                 "Instructors Count": num_supervisors,
                 "Customer Provides Instructors": "Yes" if customer_covers_supervisors else "No",
-                "Instructor Allocation (%)": round(effective_instructor_pct_csv, 1),
+                "Instructor Allocation (%)": effective_instructor_pct,
                 "Labour Output (%)": prisoner_output,
                 "Employment Support": employment_support,
                 "Contracts Overseen": contracts,
+                "Additional Prison Benefits?": "Yes" if benefits_yes else "No",
+                "Benefits Notes": benefits_text,
                 "VAT Rate (%)": 20.0,
-                "Additional Benefits Applied": "Yes" if benefits_yes else "No",
-                "Additional Benefits Note": benefits_note.strip() if benefits_yes else "",
             }
-            csv_bytes = export_csv_single_row(common, df, seg_df)
+            csv_bytes = export_csv_single_row(common, df, None)
             st.download_button(
                 "Download CSV (Production)",
                 data=csv_bytes,
@@ -707,7 +547,7 @@ if contract_type == "Production":
         with c2:
             st.download_button(
                 "Download PDF-ready HTML (Production)",
-                data=export_html(None, df, title="Production Quote", header_block=header_block, segregated_df=seg_df),
+                data=export_html(None, df, title="Production Quote", header_block=header_block, segregated_df=None),
                 file_name="production_quote.html",
                 mime="text/html"
             )
