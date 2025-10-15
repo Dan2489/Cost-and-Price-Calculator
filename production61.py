@@ -1,221 +1,184 @@
-# production61.py
-from __future__ import annotations
-
+from typing import List, Dict, Optional
+from datetime import date, timedelta
 import math
-import pandas as pd
-from datetime import date as _date
 
-# -----------------------------------------------------------------------------
-# Utilities shared in app
-# -----------------------------------------------------------------------------
+# Band 3 shadow costs (annual)
+BAND3_COSTS = {
+    "Outer London": 45855.97,
+    "Inner London": 49202.70,
+    "National": 42247.81,
+}
 
-def labour_minutes_budget(num_prisoners: int, workshop_hours: float) -> float:
-    """Weekly minutes available at 100% output."""
-    return float(num_prisoners) * float(workshop_hours) * 60.0
+def labour_minutes_budget(num_pris: int, hours: float) -> float:
+    return max(0.0, float(num_pris) * float(hours) * 60.0)
 
+def _working_days_between(start: date, end: date) -> int:
+    if end < start: return 0
+    days, d = 0, start
+    while d <= end:
+        if d.weekday() < 5: days += 1
+        d += timedelta(days=1)
+    return days
 
-def _money(x: float) -> float:
-    return round(float(x), 4)
-
-
-def _money2(x: float) -> float:
-    return round(float(x), 2)
-
-
-def _num(x) -> float:
-    try:
-        return float(x)
-    except Exception:
+def _dev_rate_from_support(employment_support: str) -> float:
+    # Starts 20%; each selected option deducts 10%. “Both” deducts 20%.
+    s = (employment_support or "").lower()
+    base = 0.20
+    if s == "none":
+        return base
+    if "both" in s:
         return 0.0
-
-
-def _dev_rate_from_support(s: str) -> float:
-    if s == "None":
-        return 0.20
-    if s in ("Employment on release/RoTL", "Post release"):
-        return 0.10
-    return 0.00
-
-
-# -----------------------------------------------------------------------------
-# Contractual production calculator
-# -----------------------------------------------------------------------------
+    # one of the two options -> 10%
+    return 0.10
 
 def calculate_production_contractual(
-    items: list[dict],
+    items: List[Dict],
     output_pct: int,
     *,
     workshop_hours: float,
     prisoner_salary: float,
-    supervisor_salaries: list[float],
-    effective_pct: float = 100.0,     # kept for compatibility; if <=0 we’ll auto-compute
+    supervisor_salaries: List[float],
+    effective_pct: float,                     # instructor allocation slider (0–100)
     customer_covers_supervisors: bool,
     region: str,
-    customer_type: str = "Commercial",
-    apply_vat: bool = True,
-    vat_rate: float = 20.0,
-    num_prisoners: int = 0,
-    num_supervisors: int = 0,
-    dev_rate: float = None,
-    pricing_mode: str = "as-is",      # "as-is" (use capacity at planned output) or "target"
-    targets: list[int] | None = None,
+    customer_type: str,
+    apply_vat: bool,
+    vat_rate: float,
+    num_prisoners: int,
+    num_supervisors: int,
+    dev_rate: float = 0.0,                    # kept for compatibility (we compute from employment_support instead)
+    pricing_mode: str = "as-is",              # "as-is" | "target"
+    targets: Optional[List[int]] = None,
     lock_overheads: bool = False,
     employment_support: str = "None",
-
-    # NEW – centralized “additional prison benefits”
-    apply_benefits: bool = False,
-    benefits_desc: str = "",
-    benefits_discount_pc: float = 0.10,
-
-    # Optional: how many contracts they oversee (for auto instructor % if effective_pct<=0)
-    contracts: int | None = None,
-):
+) -> List[Dict]:
     """
-    Returns a list of per-item dicts with columns used by the UI.
-
-    Cost model (weekly -> monthly):
-      - Prisoner wages: assigned * prisoner_salary
-      - Instructor base (weekly) from selected titles; effective % applied.
-      - Benefits discount (if any) applied to instructor salary BEFORE overhead/dev.
-      - Overheads = 61% of (discounted) instructor base (“shadow” base follows lock_overheads rules).
-      - Development = dev_rate * Overheads.
-      - Split overhead+dev to items by share of (assigned * workshop_hours * 60) over sum for all items.
-      - Unit Cost = (prisoner + allocated overhead + allocated development) / units_for_pricing
-      - Unit Price ex VAT = Unit Cost  (your calculator presents “price” == cost)
-      - Monthly Totals = Units/month * Unit Price ex VAT (+ VAT column if requested)
-
-    The function keeps output columns identical to your app expectations.
+    Returns a list of rows per item with added keys:
+      - 'Instructor Weekly Share (£)'          -> per-item instructor salary share (weekly)
+      - 'Unit Cost excl Instructor (£)'        -> ex-VAT unit cost excluding instructor
+      - 'Monthly Instructor Share (£)'         -> per-item instructor share per month (to check sums)
+    Existing keys remain unchanged.
     """
-
-    out = []
-    output_scale = _num(output_pct) / 100.0
-    dev_rate = _dev_rate_from_support(employment_support) if dev_rate is None else float(dev_rate)
-
-    # ---------- Effective instructor allocation ----------
-    if not effective_pct or effective_pct < 0:
-        # auto % if possible
-        if workshop_hours and (contracts or 1):
-            eff_pct = min(100.0, max(0.0, (workshop_hours / 37.5) * (1.0 / max(1, (contracts or 1))) * 100.0))
-        else:
-            eff_pct = 100.0
+    # Instructor weekly total (if customer provides instructor, this is 0)
+    if not customer_covers_supervisors:
+        inst_weekly_total = sum((s / 52.0) * (float(effective_pct) / 100.0) for s in supervisor_salaries)
     else:
-        eff_pct = max(0.0, min(100.0, float(effective_pct)))
+        inst_weekly_total = 0.0
 
-    # ---------- Weekly instructor base ----------
-    sum_weekly = sum((_num(s) / 52.0) for s in (supervisor_salaries or []))
-    max_weekly = max([_num(s) for s in (supervisor_salaries or [0.0])]) / 52.0 if supervisor_salaries else 0.0
-
-    # charge for instructor salary (weekly)
-    inst_weekly_charge = sum_weekly * (eff_pct / 100.0) if not customer_covers_supervisors else 0.0
-    if apply_benefits and inst_weekly_charge > 0:
-        inst_weekly_charge *= (1.0 - float(benefits_discount_pc or 0.0))
-
-    # “shadow” base used for overheads
+    # Overhead base (shadow if customer provides; otherwise actual; optionally lock to highest)
     if customer_covers_supervisors:
-        overhead_base_weekly = max_weekly * (eff_pct / 100.0) if lock_overheads and supervisor_salaries else 0.0
+        shadow = BAND3_COSTS.get(region, 42247.81)
+        overhead_base = (shadow / 52.0) * (float(effective_pct) / 100.0)
     else:
-        base = (max_weekly if (lock_overheads and supervisor_salaries) else sum_weekly) * (eff_pct / 100.0)
-        if apply_benefits and base > 0:
-            base *= (1.0 - float(benefits_discount_pc or 0.0))
-        overhead_base_weekly = base
+        overhead_base = inst_weekly_total
 
-    overheads_weekly_total = overhead_base_weekly * 0.61
-    dev_weekly_total = overheads_weekly_total * dev_rate
+    if lock_overheads and (supervisor_salaries or customer_covers_supervisors):
+        base_for_lock = max(supervisor_salaries) if (supervisor_salaries and not customer_covers_supervisors) else BAND3_COSTS.get(region, 42247.81)
+        overhead_base = (base_for_lock / 52.0) * (float(effective_pct) / 100.0)
 
-    # Denominator for sharing overhead+dev to lines:
-    denom_minutes = sum(int(_num(it.get("assigned", 0))) * workshop_hours * 60.0 for it in items)
+    overheads_weekly = overhead_base * 0.61
 
-    # Precompute monthly instructor & monthly overhead/dev for grand sum (they’ll be spread by share)
-    inst_monthly = inst_weekly_charge * 52.0 / 12.0
-    overheads_monthly_total = overheads_weekly_total * 52.0 / 12.0
-    dev_monthly_total = dev_weekly_total * 52.0 / 12.0
+    # Development charge — applies except to Another Government Department; here we use employment_support rule
+    # (If your app treats all production as Commercial, pass the string and we’ll compute 0/10/20%)
+    dev_rate_eff = _dev_rate_from_support(employment_support)
+    dev_weekly_total = overheads_weekly * dev_rate_eff
 
-    # Loop through items
+    denom_minutes = sum(int(it.get("assigned", 0)) * workshop_hours * 60.0 for it in items)
+    output_scale = float(output_pct) / 100.0
+
+    results: List[Dict] = []
     for idx, it in enumerate(items):
         name = (it.get("name") or "").strip() or f"Item {idx+1}"
-        pris_required = int(_num(it.get("required", 1)))
-        pris_assigned = int(_num(it.get("assigned", 0)))
-        minutes_per_unit = _num(it.get("minutes", 0.0))
+        mins_per_unit = float(it.get("minutes", 0))
+        pris_required = int(it.get("required", 1))
+        pris_assigned = int(it.get("assigned", 0))
 
-        # Capacity @100%
-        if pris_assigned > 0 and minutes_per_unit > 0 and pris_required > 0 and workshop_hours > 0:
-            cap_100 = (pris_assigned * workshop_hours * 60.0) / (minutes_per_unit * pris_required)
+        # Capacity
+        if pris_assigned > 0 and mins_per_unit > 0 and pris_required > 0 and workshop_hours > 0:
+            cap_100 = (pris_assigned * workshop_hours * 60.0) / (mins_per_unit * pris_required)
         else:
             cap_100 = 0.0
+        capacity_units = cap_100 * output_scale
 
-        capacity_planned = cap_100 * output_scale
+        # Share of total assigned minutes
+        share = ((pris_assigned * workshop_hours * 60.0) / denom_minutes) if denom_minutes > 0 else 0.0
 
-        # Units used for pricing
-        units_for_pricing = 0.0
+        # Weekly pools allocated to the item
+        prisoner_weekly_item   = pris_assigned * prisoner_salary
+        inst_weekly_item       = inst_weekly_total * share
+        overheads_weekly_item  = overheads_weekly * share
+        dev_weekly_item        = dev_weekly_total * share
+
+        weekly_cost_item_total = prisoner_weekly_item + inst_weekly_item + overheads_weekly_item + dev_weekly_item
+        weekly_cost_item_excl_inst = prisoner_weekly_item + overheads_weekly_item + dev_weekly_item  # no instructor
+
+        # Units to price
         if pricing_mode == "target":
             tgt = 0
             if targets and idx < len(targets):
-                try:
-                    tgt = int(targets[idx])
-                except Exception:
-                    tgt = 0
+                try: tgt = int(targets[idx])
+                except Exception: tgt = 0
             units_for_pricing = float(tgt)
         else:
-            units_for_pricing = capacity_planned
+            units_for_pricing = capacity_units
 
-        # Share for overhead/dev allocation
-        share = ((pris_assigned * workshop_hours * 60.0) / denom_minutes) if denom_minutes > 0 else 0.0
+        # Feasibility check (target mode)
+        available_minutes_item = pris_assigned * workshop_hours * 60.0 * output_scale
+        required_minutes_item  = units_for_pricing * mins_per_unit * pris_required
+        feasible = (required_minutes_item <= (available_minutes_item + 1e-6))
+        note = None
+        if pricing_mode == "target" and not feasible:
+            note = (
+                f"Target requires {required_minutes_item:,.0f} mins vs "
+                f"available {available_minutes_item:,.0f} mins; exceeds capacity."
+            )
 
-        # Weekly prisoner wages for this line
-        prisoner_weekly_item = pris_assigned * prisoner_salary
-
-        # Allocated overhead/dev weekly for this line
-        overheads_weekly_item = overheads_weekly_total * share
-        dev_weekly_item = dev_weekly_total * share
-
-        # Weekly cost excl instructor
-        weekly_excl_inst = prisoner_weekly_item + overheads_weekly_item + dev_weekly_item
-
-        # Unit economics (ex VAT)
+        # Unit costs (ex VAT); keep legacy columns, plus new excl-instructor and per-item instructor share
         if units_for_pricing > 0:
-            unit_cost = weekly_excl_inst / units_for_pricing
-            unit_price_ex_vat = unit_cost  # your tool treats price=cost
+            unit_cost_ex_vat = weekly_cost_item_total / units_for_pricing
+            unit_cost_ex_vat_excl_inst = weekly_cost_item_excl_inst / units_for_pricing
+            inst_weekly_share = inst_weekly_item
         else:
-            unit_cost = None
-            unit_price_ex_vat = None
+            unit_cost_ex_vat = None
+            unit_cost_ex_vat_excl_inst = None
+            inst_weekly_share = 0.0
 
-        unit_price_inc_vat = (unit_price_ex_vat * (1.0 + vat_rate / 100.0)) if (apply_vat and unit_price_ex_vat is not None) else None
+        unit_price_inc_vat = None
+        if unit_cost_ex_vat is not None:
+            unit_price_inc_vat = unit_cost_ex_vat * (1 + (float(vat_rate) / 100.0)) if (customer_type == "Commercial" and apply_vat) else unit_cost_ex_vat
 
-        # Monthly total (ex/incl VAT) – exclude instructor salary here (it isn’t item-specific)
-        if unit_price_ex_vat is not None:
-            monthly_ex_vat = units_for_pricing * unit_price_ex_vat * 52.0 / 12.0
-            monthly_inc_vat = (monthly_ex_vat * (1.0 + vat_rate / 100.0)) if apply_vat else monthly_ex_vat
-        else:
-            monthly_ex_vat = 0.0
-            monthly_inc_vat = 0.0
+        # Monthly totals (ex/inc VAT) using units_for_pricing
+        monthly_total_ex_vat = (units_for_pricing * unit_cost_ex_vat * 52 / 12) if (unit_cost_ex_vat is not None) else None
+        monthly_total_inc_vat = (units_for_pricing * unit_price_inc_vat * 52 / 12) if (unit_price_inc_vat is not None) else None
+        monthly_inst_share = inst_weekly_share * 52.0 / 12.0
 
-        out.append({
+        results.append({
             "Item": name,
             "Output %": int(output_pct),
-            "Capacity (units/week)": int(round(capacity_planned)) if capacity_planned > 0 else 0,
-            "Units/week": int(round(units_for_pricing)) if units_for_pricing > 0 else 0,
-            "Unit Cost (£)": _money(unit_cost) if unit_cost is not None else None,
-            "Unit Price ex VAT (£)": _money(unit_price_ex_vat) if unit_price_ex_vat is not None else None,
-            "Unit Price inc VAT (£)": _money(unit_price_inc_vat) if unit_price_inc_vat is not None else None,
-            "Monthly Total ex VAT (£)": _money2(monthly_ex_vat),
-            "Monthly Total inc VAT (£)": _money2(monthly_inc_vat),
+            "Capacity (units/week)": 0 if capacity_units <= 0 else int(round(capacity_units)),
+            "Units/week": 0 if units_for_pricing <= 0 else int(round(units_for_pricing)),
+            "Unit Cost (£)": unit_cost_ex_vat,
+            "Unit Price ex VAT (£)": unit_cost_ex_vat,              # kept for display consistency
+            "Unit Price inc VAT (£)": unit_price_inc_vat,
+            "Monthly Total ex VAT (£)": monthly_total_ex_vat,
+            "Monthly Total inc VAT (£)": monthly_total_inc_vat,
+            # New fields for segregation:
+            "Unit Cost excl Instructor (£)": unit_cost_ex_vat_excl_inst,
+            "Instructor Weekly Share (£)": inst_weekly_share,
+            "Monthly Instructor Share (£)": monthly_inst_share,
+            "Feasible": feasible if pricing_mode == "target" else None,
+            "Note": note,
         })
-
-    return out
-
-
-# -----------------------------------------------------------------------------
-# Ad-hoc calculator (unchanged in structure – benefits do NOT apply here)
-# -----------------------------------------------------------------------------
+    return results
 
 def calculate_adhoc(
-    lines: list[dict],
+    lines: List[Dict],
     output_pct: int,
     *,
     workshop_hours: float,
     num_prisoners: int,
     prisoner_salary: float,
-    supervisor_salaries: list[float],
+    supervisor_salaries: List[float],
     effective_pct: float,
     customer_covers_supervisors: bool,
     region: str,
@@ -223,69 +186,110 @@ def calculate_adhoc(
     apply_vat: bool,
     vat_rate: float,
     dev_rate: float,
-    today: _date,
+    today: date,
     lock_overheads: bool,
-    employment_support: str,
-):
+    employment_support: str = "None",
+) -> Dict:
     """
-    Keep your existing ad-hoc behaviour. This stub keeps the interface intact.
-    If you want benefits to influence ad-hoc too, mirror the contractual logic above.
+    Unchanged structure, still returns:
+      - per_line: name, units, unit_cost_ex_vat, unit_cost_inc_vat, line_total_ex_vat, line_total_inc_vat, wd_available, wd_needed_line_alone
+      - totals, capacity, feasibility
     """
-    # Simple feasibility check
-    if workshop_hours <= 0 or num_prisoners <= 0:
-        return {
-            "feasibility": {"hard_block": True, "reason": "Invalid workshop hours or prisoner count."}
-        }
+    output_scale = float(output_pct) / 100.0
+    hours_per_day = float(workshop_hours) / 5.0
+    daily_minutes_capacity_per_prisoner = hours_per_day * 60.0 * output_scale
+    current_daily_capacity = num_prisoners * daily_minutes_capacity_per_prisoner
+    minutes_per_week_capacity = max(1e-9, num_prisoners * workshop_hours * 60.0 * output_scale)
 
-    # This is a very light placeholder. Your previous version likely did more;
-    # we keep compatibility by returning a minimal valid structure.
-    result_lines = []
-    for i, ln in enumerate(lines):
-        name = (ln.get("name") or f"Item {i+1}").strip()
-        units = int(_num(ln.get("units", 0)))
-        mins = _num(ln.get("mins_per_item", 0.0))
-        pris_req = int(_num(ln.get("pris_per_item", 1)))
-        if units <= 0 or mins < 0 or pris_req <= 0:
-            continue
+    # Instructor weekly total
+    if not customer_covers_supervisors:
+        inst_weekly_total = sum((s / 52.0) * (float(effective_pct) / 100.0) for s in supervisor_salaries)
+    else:
+        inst_weekly_total = 0.0
 
-        # naive cost = prisoner wages only (placeholder)
-        weekly_cost = pris_req * prisoner_salary
-        unit_cost = (weekly_cost / max(1, units)) if units > 0 else 0.0
-        monthly_ex_vat = units * unit_cost * 52.0 / 12.0
-        monthly_inc_vat = monthly_ex_vat * (1.0 + vat_rate / 100.0) if apply_vat else monthly_ex_vat
+    # Overheads base
+    if customer_covers_supervisors:
+        shadow = BAND3_COSTS.get(region, 42247.81)
+        overhead_base = (shadow / 52.0) * (float(effective_pct) / 100.0)
+    else:
+        overhead_base = inst_weekly_total
 
-        result_lines.append({
-            "name": name,
-            "units": units,
-            "unit_cost": _money(unit_cost),
-            "monthly_ex_vat": _money2(monthly_ex_vat),
-            "monthly_inc_vat": _money2(monthly_inc_vat),
+    if lock_overheads and (supervisor_salaries or customer_covers_supervisors):
+        base_for_lock = max(supervisor_salaries) if (supervisor_salaries and not customer_covers_supervisors) else BAND3_COSTS.get(region, 42247.81)
+        overhead_base = (base_for_lock / 52.0) * (float(effective_pct) / 100.0)
+
+    overheads_weekly = overhead_base * 0.61
+    dev_rate_eff = _dev_rate_from_support(employment_support)
+    dev_weekly_total = overheads_weekly * dev_rate_eff
+
+    prisoners_weekly_cost = num_prisoners * prisoner_salary
+    weekly_cost_total = prisoners_weekly_cost + inst_weekly_total + overheads_weekly + dev_weekly_total
+    cost_per_minute = weekly_cost_total / minutes_per_week_capacity
+
+    per_line, total_job_minutes, earliest_wd_available = [], 0.0, None
+    for ln in lines:
+        mins_per_unit = float(ln["mins_per_item"]) * int(ln["pris_per_item"])  # already in minutes
+        unit_cost_ex_vat = cost_per_minute * mins_per_unit
+        if customer_type == "Commercial" and apply_vat:
+            unit_cost_inc_vat = unit_cost_ex_vat * (1 + (float(vat_rate) / 100.0))
+        else:
+            unit_cost_inc_vat = unit_cost_ex_vat
+
+        total_line_minutes = int(ln["units"]) * mins_per_unit
+        total_job_minutes += total_line_minutes
+        wd_available = _working_days_between(today, ln["deadline"])
+        if earliest_wd_available is None or wd_available < earliest_wd_available:
+            earliest_wd_available = wd_available
+        wd_needed_line_alone = math.ceil(total_line_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
+
+        per_line.append({
+            "name": ln["name"],
+            "units": int(ln["units"]),
+            "unit_cost_ex_vat": unit_cost_ex_vat,
+            "unit_cost_inc_vat": unit_cost_inc_vat,
+            "line_total_ex_vat": unit_cost_ex_vat * int(ln["units"]),
+            "line_total_inc_vat": unit_cost_inc_vat * int(ln["units"]),
+            "wd_available": wd_available,
+            "wd_needed_line_alone": wd_needed_line_alone,
         })
+
+    wd_needed_all = math.ceil(total_job_minutes / current_daily_capacity) if current_daily_capacity > 0 else float("inf")
+    earliest_wd_available = earliest_wd_available or 0
+    available_total_minutes_by_deadline = current_daily_capacity * earliest_wd_available
+    hard_block = total_job_minutes > available_total_minutes_by_deadline
+    reason = None
+    if hard_block:
+        reason = (
+            f"Requested total minutes ({total_job_minutes:,.0f}) exceed available minutes by the earliest deadline "
+            f"({available_total_minutes_by_deadline:,.0f}). Reduce units, add prisoners, increase hours, extend deadline or lower Output%."
+        )
+
+    totals_ex = sum(p["line_total_ex_vat"] for p in per_line)
+    totals_inc = sum(p["line_total_inc_vat"] for p in per_line)
 
     return {
-        "feasibility": {"hard_block": False, "reason": ""},
-        "lines": result_lines,
-        "totals": {
-            "ex_vat": _money2(sum(l["monthly_ex_vat"] for l in result_lines)),
-            "inc_vat": _money2(sum(l["monthly_inc_vat"] for l in result_lines)),
-        }
+        "per_line": per_line,
+        "totals": {"ex_vat": totals_ex, "inc_vat": totals_inc},
+        "capacity": {"current_daily_capacity": current_daily_capacity, "minutes_per_week_capacity": minutes_per_week_capacity},
+        "feasibility": {"earliest_wd_available": earliest_wd_available, "wd_needed_all": wd_needed_all, "hard_block": hard_block, "reason": reason},
     }
 
-
-def build_adhoc_table(result: dict):
-    if result.get("feasibility", {}).get("hard_block"):
-        return pd.DataFrame(), {}
-
+def build_adhoc_table(result: Dict):
+    """Helper to produce the flat table used by newapp for Ad-hoc."""
     rows = []
-    for ln in result.get("lines", []):
+    for p in result.get("per_line", []):
         rows.append({
-            "Item": ln["name"],
-            "Monthly Total ex VAT (£)": ln["monthly_ex_vat"],
-            "Monthly Total inc VAT (£)": ln["monthly_inc_vat"],
+            "Item": p.get("name", "—"),
+            "Units": p.get("units", 0),
+            "Unit Cost (ex VAT £)": round(p.get("unit_cost_ex_vat", 0.0), 2),
+            "Unit Cost (inc VAT £)": round(p.get("unit_cost_inc_vat", 0.0), 2),
+            "Line Total (ex VAT £)": round(p.get("line_total_ex_vat", 0.0), 2),
+            "Line Total (inc VAT £)": round(p.get("line_total_inc_vat", 0.0), 2),
         })
-
+    import pandas as pd
+    df = pd.DataFrame(rows, columns=[
+        "Item", "Units", "Unit Cost (ex VAT £)", "Unit Cost (inc VAT £)",
+        "Line Total (ex VAT £)", "Line Total (inc VAT £)"
+    ])
     totals = result.get("totals", {})
-    if rows:
-        rows.append({"Item": "Grand Total", "Monthly Total ex VAT (£)": totals.get("ex_vat", 0.0),
-                     "Monthly Total inc VAT (£)": totals.get("inc_vat", 0.0)})
-    return pd.DataFrame(rows), totals
+    return df, totals
