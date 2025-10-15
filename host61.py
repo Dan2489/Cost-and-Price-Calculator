@@ -1,183 +1,110 @@
-# utils61.py
+# host61.py
 from __future__ import annotations
-import io
 import pandas as pd
-import streamlit as st
-from html import escape
+from utils61 import fmt_currency
 
-# -----------------------------
-# GOV.UK styling + buttons
-# -----------------------------
-def inject_govuk_css():
-    st.markdown(
-        """
-        <style>
-        body, input, select, textarea {
-          font-family: "HelveticaNeue", "Helvetica Neue", Helvetica, Arial, sans-serif;
-          font-size: 15px;
-        }
-        table { width:100%; border-collapse:collapse; margin:10px 0; }
-        th, td {
-          padding:6px 10px; text-align:left;
-          border:1px solid #b1b4b6;   /* BORDER ON TABLES */
-        }
-        th { background:#f3f2f1; font-weight:600; }
-        .red-text { color:#d4351c; font-weight:600; }
-        .panel {
-          background:#f3f2f1; border-left:5px solid #1d70b8;
-          padding:10px 12px; margin:12px 0; white-space:pre-wrap;
-        }
 
-        /* Make ALL Streamlit buttons GOV.UK green */
-        .stButton > button {
-          background-color: #00703c !important; color: #fff !important;
-          border-radius: 4px !important; font-weight: 700 !important; border: 0 !important;
-          padding: 0.4rem 0.9rem !important;
-        }
-        .stButton > button:hover { background-color:#005a30 !important; }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
+def generate_host_quote(
+    workshop_hours: float,
+    num_prisoners: int,
+    prisoner_salary: float,
+    num_supervisors: int,
+    customer_covers_supervisors: bool,
+    supervisor_salaries: list[float],
+    region: str,
+    contracts: int,
+    employment_support: str,
+    instructor_allocation: float,
+    lock_overheads: bool,
+    benefits_yes: bool = False,
+    benefits_discount_pc: float = 0.10,
+):
+    """
+    Build the Host contract quote table with all cost components.
+    """
 
-# -----------------------------
-# Sidebar controls
-# -----------------------------
-def sidebar_controls(default_output: int):
-    with st.sidebar:
-        st.header("Controls")
-        lock_overheads = st.checkbox("Lock Overheads to Highest Instructor", value=False)
-        instructor_pct_fixed = 100  # fixed (slider removed)
-        prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output, step=5)
-    return lock_overheads, instructor_pct_fixed, prisoner_output
+    # --- Base rates ---
+    prisoner_monthly = num_prisoners * prisoner_salary * 52.0 / 12.0
 
-# -----------------------------
-# Formatting
-# -----------------------------
-def fmt_currency(val, dp: int = 2) -> str:
-    try:
-        return f"£{float(val):,.{dp}f}"
-    except Exception:
-        return "£0.00"
+    if customer_covers_supervisors:
+        instructor_monthly = 0.0
+    else:
+        total = sum(supervisor_salaries)
+        alloc = (workshop_hours / 37.5) * (1.0 / contracts)
+        instructor_monthly = (total / 12.0) * alloc
 
-# -----------------------------
-# CSV helpers
-# -----------------------------
-def export_csv_bytes(df: pd.DataFrame) -> bytes:
-    sio = io.StringIO()
-    df.to_csv(sio, index=False)
-    return sio.getvalue().encode("utf-8")
+    # Overheads (61%)
+    overheads_monthly = instructor_monthly * 0.61
 
-def export_csv_bytes_rows(rows: list[dict]) -> bytes:
-    return export_csv_bytes(pd.DataFrame(rows))
+    # Development charge based on Employment Support
+    if employment_support == "None":
+        dev_rate = 0.20
+    elif employment_support in ("Employment on release/RoTL", "Post release"):
+        dev_rate = 0.10
+    else:
+        dev_rate = 0.0
+    dev_charge_monthly = overheads_monthly * dev_rate
 
-def export_csv_single_row(common: dict, df: pd.DataFrame, seg_df: pd.DataFrame | None = None) -> bytes:
-    row = dict(common)
-    if isinstance(df, pd.DataFrame) and not df.empty:
-        for i, r in df.iterrows():
-            item = str(r.get("Item", f"Row{i+1}")).strip()
-            for c in [c for c in df.columns if c != "Item"]:
-                row[f"{item} - {c}"] = r.get(c)
-    if isinstance(seg_df, pd.DataFrame) and not seg_df.empty:
-        for i, r in seg_df.iterrows():
-            item = str(r.get("Item", f"Seg{i+1}")).strip()
-            for c in [c for c in seg_df.columns if c != "Item"]:
-                row[f"Seg {item} - {c}"] = r.get(c)
-    return export_csv_bytes_rows([row])
+    # Revised total before any benefit reduction
+    subtotal = prisoner_monthly + instructor_monthly + overheads_monthly + dev_charge_monthly
 
-# -----------------------------
-# Render tables
-# -----------------------------
-def render_table_html(df: pd.DataFrame) -> str:
-    if df is None or df.empty:
-        return "<p><em>No data.</em></p>"
+    # Development charge reduction (illustrative)
+    dev_reduction = dev_charge_monthly * 0.0  # placeholder for later adjustment
 
-    def cell(v):
-        if isinstance(v, (int, float)):
-            return fmt_currency(v)
-        s = str(v)
-        if "reduction" in s.lower():
-            return f"<span class='red-text'>{escape(s)}</span>"
-        return escape(s)
+    # Additional benefit discount (10%) if applicable and support == Both
+    benefits_reduction = 0.0
+    if benefits_yes and employment_support == "Both":
+        benefits_reduction = instructor_monthly * benefits_discount_pc
 
-    h = ["<table><thead><tr>"] + [f"<th>{escape(c)}</th>" for c in df.columns] + ["</tr></thead><tbody>"]
-    for _, r in df.iterrows():
-        h.append("<tr>")
-        for c in df.columns:
-            h.append(f"<td>{cell(r[c])}</td>")
-        h.append("</tr>")
-    h.append("</tbody></table>")
-    return "".join(h)
+    revised_dev_charge = dev_charge_monthly - dev_reduction
+    grand_total = subtotal - dev_reduction - benefits_reduction
+    vat_amount = grand_total * 0.20
+    grand_total_inc_vat = grand_total + vat_amount
 
-# -----------------------------
-# HTML export (full UTF-8 doc)
-# -----------------------------
-def export_html(host_df, prod_df, *, title="Quote", header_block=None, segregated_df=None, notes: str | None = None) -> bytes:
-    head = f"""
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>{escape(title)}</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body {{ font-family: Helvetica, Arial, sans-serif; font-size: 15px; margin: 20px; }}
-h1,h2,h3 {{ margin: 0 0 8px 0; }}
-table {{ width:100%; border-collapse:collapse; margin:10px 0; }}
-th, td {{ padding:6px 10px; text-align:left; border:1px solid #b1b4b6; }}
-th {{ background:#f3f2f1; font-weight:600; }}
-.red-text {{ color:#d4351c; font-weight:600; }}
-.panel {{ background:#f3f2f1; border-left:5px solid #1d70b8; padding:10px 12px; margin:12px 0; white-space:pre-wrap; }}
-.small {{ color:#505a5f; font-size: 13px; }}
-</style>
-</head>
-<body>
-<h2>{escape(title)}</h2>
-"""
-    parts = [head]
+    # --- Build table ---
+    rows = [
+        {"Item": "Prisoner Wages", "Amount (£)": fmt_currency(prisoner_monthly)},
+    ]
 
-    if header_block:
-        parts.append("<table>")
-        for k, v in header_block.items():
-            parts.append(f"<tr><th>{escape(k.title())}</th><td>{escape(str(v))}</td></tr>")
-        parts.append("</table>")
+    if instructor_monthly > 0:
+        rows.append({"Item": "Instructor Salary", "Amount (£)": fmt_currency(instructor_monthly)})
 
-    if notes:
-        parts.append(f"<div class='panel'><div class='small'><strong>About this quote</strong></div>{escape(notes)}</div>")
+    if overheads_monthly > 0:
+        rows.append({"Item": "Overheads", "Amount (£)": fmt_currency(overheads_monthly)})
 
-    if isinstance(host_df, pd.DataFrame):
-        parts.append(render_table_html(host_df))
-    if isinstance(prod_df, pd.DataFrame):
-        parts.append(render_table_html(prod_df))
-    if isinstance(segregated_df, pd.DataFrame):
-        parts.append("<h4>Segregated Costs</h4>")
-        parts.append(render_table_html(segregated_df))
+    if dev_charge_monthly > 0:
+        rows.append({"Item": "Development charge", "Amount (£)": fmt_currency(dev_charge_monthly)})
 
-    parts.append("</body></html>")
-    return "".join(parts).encode("utf-8")
+    if dev_reduction > 0:
+        rows.append({"Item": "Development charge reduction", "Amount (£)": f"<span style='color:red'>{fmt_currency(dev_reduction)}</span>"})
 
-# -----------------------------
-# Header block
-# -----------------------------
-def build_header_block(*, uk_date: str, customer_name: str, prison_name: str, region: str,
-                       benefits_desc: str | None = None, **_):
-    hb = {
-        "Date": uk_date,
-        "Customer Name": str(customer_name or "").strip(),
-        "Prison Name": str(prison_name or "").strip(),
-        "Region": str(region or "").strip(),
+    if revised_dev_charge > 0:
+        rows.append({"Item": "Revised development charge", "Amount (£)": fmt_currency(revised_dev_charge)})
+
+    if benefits_reduction > 0:
+        rows.append({"Item": "Additional Benefits Reduction", "Amount (£)": f"<span style='color:red'>{fmt_currency(benefits_reduction)}</span>"})
+
+    rows += [
+        {"Item": "Subtotal", "Amount (£)": fmt_currency(subtotal)},
+        {"Item": "Grand Total", "Amount (£)": fmt_currency(grand_total)},
+        {"Item": "VAT (20%)", "Amount (£)": fmt_currency(vat_amount)},
+        {"Item": "Grand Total inc VAT", "Amount (£)": fmt_currency(grand_total_inc_vat)},
+    ]
+
+    df = pd.DataFrame(rows)
+
+    context = {
+        "prisoner_monthly": prisoner_monthly,
+        "instructor_monthly": instructor_monthly,
+        "overheads_monthly": overheads_monthly,
+        "dev_charge_monthly": dev_charge_monthly,
+        "dev_reduction": dev_reduction,
+        "benefits_reduction": benefits_reduction,
+        "revised_dev_charge": revised_dev_charge,
+        "subtotal": subtotal,
+        "grand_total": grand_total,
+        "vat_amount": vat_amount,
+        "grand_total_inc_vat": grand_total_inc_vat,
     }
-    if benefits_desc:
-        hb["Additional Prison Benefits"] = str(benefits_desc).strip()
-    return hb
 
-# Compatibility stub
-def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
-    df2 = df.copy()
-    for col in df2.columns:
-        if any(k in col for k in ["£", "Amount", "Total"]):
-            try:
-                df2[col] = pd.to_numeric(df2[col], errors="coerce") * factor
-            except Exception:
-                pass
-    return df2
+    return df, context
