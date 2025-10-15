@@ -1,222 +1,201 @@
+# utils61.py
 import io
+import base64
 import pandas as pd
+import streamlit as st
+from datetime import date
+from io import BytesIO
+from html import escape
 
-# -------------------------------
-# Inject GOV.UK styling
-# -------------------------------
+# -------------------------------------------------------------
+# GOV.UK styling injection
+# -------------------------------------------------------------
 def inject_govuk_css():
-    import streamlit as st
     st.markdown(
         """
         <style>
-          :root {
-            --govuk-green: #00703c;
-            --govuk-yellow: #ffdd00;
-          }
-          .stButton > button {
-            background: var(--govuk-green) !important;
-            color: #fff !important;
-            border: 2px solid transparent !important;
-            border-radius: 0 !important;
-            font-weight: 600;
-          }
-          .stButton > button:hover { filter: brightness(0.95); }
-          .stButton > button:focus {
-            outline: 3px solid var(--govuk-yellow) !important;
-            box-shadow: 0 0 0 1px #000 inset !important;
-          }
-          table.custom { width: 100%; border-collapse: collapse; margin: 12px 0; }
-          table.custom th, table.custom td {
-            border: 1px solid #b1b4b6;
+        body, input, select, textarea {
+            font-family: "HelveticaNeue", "Helvetica Neue", Helvetica, Arial, sans-serif;
+            font-size: 15px;
+        }
+        .govuk-button {
+            background-color: #00703c;
+            border-radius: 4px;
+            color: white !important;
+            padding: 8px 16px;
+            font-weight: bold;
+        }
+        .govuk-button:hover {
+            background-color: #005a30;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            margin-bottom: 10px;
+        }
+        th, td {
             padding: 6px 10px;
             text-align: left;
-          }
-          table.custom th { background: #f3f2f1; font-weight: bold; }
-          table.custom td.neg { color: #d4351c; }
-          table.custom tr.grand td { font-weight: bold; }
-          table.custom.highlight { background-color: #fff8dc; }
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background: #f3f2f1;
+            font-weight: 600;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        .red-text {
+            color: red;
+            font-weight: 600;
+        }
         </style>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-# -------------------------------
-# Sidebar controls (trimmed)
-# -------------------------------
-def sidebar_controls(default_output: int):
-    """
-    We’ve removed lock-overheads & instructor slider per spec.
-    Return placeholders so callers can keep unpacking.
-    """
-    import streamlit as st
+
+# -------------------------------------------------------------
+# Sidebar controls
+# -------------------------------------------------------------
+def sidebar_controls(default_output):
     with st.sidebar:
         st.header("Controls")
-        prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output, step=5, key="labour_out")
-    # (lock_overheads=False, instructor_pct=100 placeholder, prisoner_output)
-    return False, 100, prisoner_output
+        lock_overheads = st.checkbox("Lock Overheads to Highest Instructor", value=False)
+        instructor_pct = 100  # fixed now — slider removed
+        prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output, step=5)
+    return lock_overheads, instructor_pct, prisoner_output
 
-# -------------------------------
-# Formatters
-# -------------------------------
-def fmt_currency(val) -> str:
+
+# -------------------------------------------------------------
+# Formatting helpers
+# -------------------------------------------------------------
+def fmt_currency(val, dp=2):
     try:
-        return f"£{float(val):,.2f}"
+        return f"£{float(val):,.{dp}f}"
     except Exception:
-        return str(val)
+        return "£0.00"
 
-# -------------------------------
-# Export functions
-# -------------------------------
-def export_csv_bytes(df: pd.DataFrame) -> bytes:
-    buf = io.StringIO()
-    df.to_csv(buf, index=False)
-    return buf.getvalue().encode("utf-8")
 
-def export_csv_bytes_rows(rows: list[dict]) -> bytes:
+# -------------------------------------------------------------
+# CSV export helpers
+# -------------------------------------------------------------
+def export_csv_bytes(df: pd.DataFrame):
+    output = io.StringIO()
+    df.to_csv(output, index=False)
+    return output.getvalue().encode("utf-8")
+
+
+def export_csv_bytes_rows(rows: list[dict]):
     df = pd.DataFrame(rows)
-    buf = io.StringIO()
-    df.to_csv(buf, index=False)
-    return buf.getvalue().encode("utf-8")
+    return export_csv_bytes(df)
 
-def export_csv_single_row(common: dict, df_main: pd.DataFrame, segregated_df: pd.DataFrame | None) -> bytes:
+
+def export_csv_single_row(common: dict, df: pd.DataFrame, seg_df: pd.DataFrame | None = None):
     """
-    Flatten df_main (quote table) into single-row columns after the shared 'common' fields.
+    Flattened single-line CSV export with all input columns (common)
+    and dynamic output columns (from df and seg_df).
     """
-    row = dict(common)
-    # take up to 20 items safely
-    max_items = 20
-    if df_main is not None and not df_main.empty and {"Item","Amount (£)"}.issubset(df_main.columns):
-        items = df_main.reset_index(drop=True)
-        for i in range(min(max_items, len(items))):
-            item = str(items.loc[i, "Item"])
-            amt = items.loc[i, "Amount (£)"]
-            try:
-                amt = float(str(amt).replace("£","").replace(",",""))
-            except Exception:
-                amt = None
-            row[f"Line {i+1} - Item"] = item
-            row[f"Line {i+1} - Amount (£)"] = amt
+    row = common.copy()
+    if isinstance(df, pd.DataFrame):
+        for idx, r in df.iterrows():
+            item = str(r.get("Item", f"Row{idx+1}")).strip()
+            for c in [col for col in df.columns if col != "Item"]:
+                key = f"{item} - {c}"
+                row[key] = r.get(c)
+    if isinstance(seg_df, pd.DataFrame):
+        for idx, r in seg_df.iterrows():
+            item = str(r.get("Item", f"Seg{idx+1}")).strip()
+            for c in [col for col in seg_df.columns if col != "Item"]:
+                key = f"Seg {item} - {c}"
+                row[key] = r.get(c)
+    return export_csv_bytes_rows([row])
 
-    if segregated_df is not None and not segregated_df.empty:
-        seg = segregated_df.reset_index(drop=True)
-        for i in range(min(20, len(seg))):
-            item = str(seg.loc[i, "Item"])
-            amt = seg.loc[i, seg.columns[-1]]
-            try:
-                amt = float(str(amt).replace("£","").replace(",",""))
-            except Exception:
-                amt = None
-            row[f"Seg {i+1} - Item"] = item
-            row[f"Seg {i+1} - Amount (£)"] = amt
 
-    buf = io.StringIO()
-    pd.DataFrame([row]).to_csv(buf, index=False)
-    return buf.getvalue().encode("utf-8")
-
-def export_html(df_host: pd.DataFrame, df_prod: pd.DataFrame,
-                title: str, header_block: dict = None, segregated_df: pd.DataFrame = None) -> str:
-    styles = """
-    <style>
-        body { font-family: Arial, sans-serif; }
-        h1 { margin-bottom: 0.2rem; }
-        .muted { color: #505a5f; font-size: 0.9rem; }
-        table.custom { width: 100%; border-collapse: collapse; margin: 12px 0; }
-        table.custom th, table.custom td { border: 1px solid #b1b4b6; padding: 6px 10px; text-align: left; }
-        table.custom th { background: #f3f2f1; font-weight: bold; }
-        table.custom.highlight { background-color: #fff8dc; }
-        .red { color: #d4351c; }
-    </style>
-    """
-    html = f"<html><head><meta charset='utf-8' />{styles}</head><body>"
-    html += f"<h1>{title}</h1>"
+# -------------------------------------------------------------
+# HTML Export (for PDF-ready HTML)
+# -------------------------------------------------------------
+def export_html(host_df, prod_df, *, title="Quote", header_block=None, segregated_df=None):
+    html = f"<h2>{escape(title)}</h2>"
     if header_block:
-        html += f"<div class='muted'>Customer: <strong>{header_block.get('customer')}</strong> · Prison: <strong>{header_block.get('prison')}</strong> · Region: <strong>{header_block.get('region')}</strong> · Date: {header_block.get('date')}</div>"
-        if header_block.get("benefits"):
-            html += f"<div class='muted'>Benefits: {header_block.get('benefits')}</div>"
-        html += (
-            "<p>We are pleased to set out below the terms of our Quotation for the Goods and/or Services you are "
-            "currently seeking. We confirm that this Quotation and any subsequent contract entered into as a result "
-            "is, and will be, subject exclusively to our Standard Conditions of Sale of Goods and/or Services a copy "
-            "of which is available on request. Please note that all prices are exclusive of VAT and carriage costs at "
-            "time of order of which the customer shall be additionally liable to pay.</p>"
-        )
+        html += "<table>"
+        for k, v in header_block.items():
+            html += f"<tr><th>{escape(k.title())}</th><td>{escape(str(v))}</td></tr>"
+        html += "</table><br>"
+    if isinstance(host_df, pd.DataFrame):
+        html += render_table_html(host_df)
+    if isinstance(prod_df, pd.DataFrame):
+        html += render_table_html(prod_df)
+    if isinstance(segregated_df, pd.DataFrame):
+        html += "<h4>Segregated Costs</h4>"
+        html += render_table_html(segregated_df)
+    return html.encode("utf-8")
 
-    if df_host is not None:
-        html += render_table_html(df_host)
-    if df_prod is not None:
-        html += render_table_html(df_prod)
-    if segregated_df is not None and not segregated_df.empty:
-        html += "<h3>Segregated Costs</h3>"
-        html += render_table_html(segregated_df, highlight=True)
 
-    html += "</body></html>"
+# -------------------------------------------------------------
+# Render DataFrame to styled HTML table
+# -------------------------------------------------------------
+def render_table_html(df: pd.DataFrame, highlight=False):
+    if df is None or df.empty:
+        return "<p><em>No data.</em></p>"
+
+    def style_cell(v):
+        if isinstance(v, (float, int)):
+            return fmt_currency(v)
+        s = str(v)
+        if "Reduction" in s or "discount" in s.lower():
+            return f"<span class='red-text'>{escape(s)}</span>"
+        return escape(s)
+
+    html = "<table><thead><tr>"
+    for col in df.columns:
+        html += f"<th>{escape(col)}</th>"
+    html += "</tr></thead><tbody>"
+    for _, row in df.iterrows():
+        html += "<tr>"
+        for col in df.columns:
+            html += f"<td>{style_cell(row[col])}</td>"
+        html += "</tr>"
+    html += "</tbody></table>"
     return html
 
-def build_header_block(uk_date: str, customer_name: str, prison_name: str, region: str, benefits_desc: str | None = None) -> dict:
-    return {
-        "date": uk_date,
-        "customer": customer_name,
-        "prison": prison_name,
-        "region": region,
-        "benefits": benefits_desc
-    }
 
-# -------------------------------
-# Table rendering
-# -------------------------------
-def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
-    if df is None or df.empty:
-        return "<p><em>No data</em></p>"
-
-    df_fmt = df.copy()
-    # currency format
-    if "Amount (£)" in df_fmt.columns:
-        df_fmt["Amount (£)"] = df_fmt["Amount (£)"].apply(lambda x: _fmt_cell(x))
-
-    # Colour negatives red
-    if "Amount (£)" in df_fmt.columns:
-        def td(val):
+# -------------------------------------------------------------
+# Table adjustments (for productivity slider)
+# -------------------------------------------------------------
+def adjust_table(df: pd.DataFrame, factor: float):
+    df2 = df.copy()
+    for col in df2.columns:
+        if "£" in col or "Amount" in col or "Total" in col:
             try:
-                v = float(str(val).replace("£","").replace(",",""))
+                df2[col] = pd.to_numeric(df2[col], errors="coerce") * factor
             except Exception:
-                v = None
-            klass = "neg" if (v is not None and v < 0) else ""
-            return f"<span class='{klass}'>{val}</span>"
-        df_fmt["Amount (£)"] = df_fmt["Amount (£)"].apply(td)
+                pass
+    return df2
 
-    cls = "custom highlight" if highlight else "custom"
-    return df_fmt.to_html(index=False, classes=cls, border=0, justify="left", escape=False)
 
-def _fmt_cell(x):
-    import pandas as pd
-    if pd.isna(x):
-        return ""
-    s = str(x)
-    if s.strip() == "":
-        return ""
-    try:
-        if "£" in s:
-            s_num = s.replace("£", "").replace(",", "").strip()
-            return fmt_currency(float(s_num))
-        return fmt_currency(float(s))
-    except Exception:
-        return s
-
-# -------------------------------
-# Adjust table for productivity
-# -------------------------------
-def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
-    if df is None or df.empty:
-        return df
-
-    df_adj = df.copy()
-    for col in df_adj.columns:
-        if col == "Amount (£)":
-            def try_scale(val):
-                try:
-                    v = float(str(val).replace("£", "").replace(",", ""))
-                    return fmt_currency(v * factor)
-                except Exception:
-                    return val
-            df_adj[col] = df_adj[col].map(try_scale)
-    return df_adj
+# -------------------------------------------------------------
+# Header block (fixed to support benefits_desc)
+# -------------------------------------------------------------
+def build_header_block(
+    *,
+    uk_date: str,
+    customer_name: str,
+    prison_name: str,
+    region: str,
+    benefits_desc: str | None = None,
+    **_ignore,
+):
+    """
+    Returns dict for header export. Accepts optional benefits_desc.
+    """
+    hb = {
+        "Date": uk_date,
+        "Customer Name": str(customer_name or "").strip(),
+        "Prison Name": str(prison_name or "").strip(),
+        "Region": str(region or "").strip(),
+    }
+    if benefits_desc:
+        hb["Additional Prison Benefits"] = str(benefits_desc).strip()
+    return hb
