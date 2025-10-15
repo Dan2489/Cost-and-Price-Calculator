@@ -40,7 +40,6 @@ def inject_govuk_css():
           table.custom tr.grand td { font-weight: bold; }
           table.custom.highlight { background-color: #fff8dc; }
 
-          /* Sidebar width + ensure it can close on mobile */
           [data-testid="stSidebar"] {
             min-width: 320px !important;
             max-width: 320px !important;
@@ -57,16 +56,14 @@ def inject_govuk_css():
     )
 
 # -------------------------------
-# Sidebar controls (unchanged)
+# Sidebar controls (simplified)
 # -------------------------------
 def sidebar_controls(default_output: int):
     import streamlit as st
     with st.sidebar:
         st.header("Controls")
-        lock_overheads = st.checkbox("Lock overheads to highest instructor", value=False)
-        instructor_pct = st.slider("Instructor allocation (%)", 0, 100, 100, step=1)
         prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output, step=5)
-    return lock_overheads, instructor_pct, prisoner_output
+    return prisoner_output
 
 # -------------------------------
 # Formatting helpers
@@ -117,14 +114,9 @@ def export_csv_bytes_rows(rows: list[dict], columns_order: list[str] | None = No
     return export_csv_bytes(df)
 
 def export_csv_single_row(common: dict, main_df: pd.DataFrame, seg_df: pd.DataFrame | None) -> bytes:
-    """
-    Single flat row with all common fields first, then per-item fields from main_df,
-    then segregated fields (including the instructor salary and grand totals).
-    All values numeric where appropriate (no £ signs) so Power BI can ingest easily.
-    """
     row = {**common}
 
-    # Per-item fields from main_df
+    # Per-item fields
     if main_df is not None and not main_df.empty and "Item" in main_df.columns:
         for idx, (_, r) in enumerate(main_df.iterrows(), start=1):
             prefix = f"Item {idx} - "
@@ -138,7 +130,6 @@ def export_csv_single_row(common: dict, main_df: pd.DataFrame, seg_df: pd.DataFr
             row[prefix + "Monthly Total ex VAT (£)"] = _to_float(r.get("Monthly Total ex VAT (£)"))
             row[prefix + "Monthly Total inc VAT (£)"] = _to_float(r.get("Monthly Total inc VAT (£)"))
 
-        # Totals across items (ex/ inc VAT) from main table
         if "Monthly Total ex VAT (£)" in main_df.columns:
             row["Production: Total Monthly ex VAT (£)"] = float(
                 pd.to_numeric(main_df["Monthly Total ex VAT (£)"], errors="coerce").fillna(0).sum()
@@ -150,7 +141,6 @@ def export_csv_single_row(common: dict, main_df: pd.DataFrame, seg_df: pd.DataFr
 
     # Segregated data
     if seg_df is not None and not seg_df.empty:
-        # Per-item (excl instructor)
         if "Item" in seg_df.columns:
             j = 1
             for _, rr in seg_df.iterrows():
@@ -166,7 +156,6 @@ def export_csv_single_row(common: dict, main_df: pd.DataFrame, seg_df: pd.DataFr
                 row[prefix + "Monthly Total excl Instructor ex VAT (£)"] = _to_float(rr.get("Monthly Total excl Instructor ex VAT (£)"))
                 j += 1
 
-            # Instructor salary + grand total
             inst_row = seg_df[seg_df["Item"].astype(str) == "Instructor Salary (monthly)"]
             if not inst_row.empty:
                 row["Seg: Instructor Salary (monthly £)"] = _to_float(inst_row.iloc[0]["Monthly Total excl Instructor ex VAT (£)"])
@@ -178,16 +167,9 @@ def export_csv_single_row(common: dict, main_df: pd.DataFrame, seg_df: pd.DataFr
     return export_csv_bytes_rows([row])
 
 # -------------------------------
-# HTML export (PDF-ready) – now supports segregated_df
+# HTML export (PDF-ready)
 # -------------------------------
-def export_html(
-    df_host: pd.DataFrame,
-    df_prod: pd.DataFrame,
-    *,
-    title: str,
-    header_block: str = None,
-    segregated_df: pd.DataFrame | None = None
-) -> str:
+def export_html(df_host, df_prod, *, title: str, header_block: str = None, segregated_df=None) -> str:
     styles = """
     <style>
         body { font-family: Arial, sans-serif; }
@@ -202,25 +184,20 @@ def export_html(
     """
     html = f"<html><head><meta charset='utf-8' />{styles}</head><body>"
     html += f"<h1>{title}</h1>"
-
     if header_block:
         html += f"<div class='meta'>{header_block}</div>"
-
     if df_host is not None:
         html += render_table_html(df_host)
-
     if df_prod is not None:
         html += render_table_html(df_prod)
-
     if segregated_df is not None and not segregated_df.empty:
         html += "<h3>Segregated Costs</h3>"
         html += render_table_html(segregated_df)
-
     html += "</body></html>"
     return html
 
 # -------------------------------
-# Header block builder (for HTML)
+# Header block builder
 # -------------------------------
 def build_header_block(*, uk_date: str, customer_name: str, prison_name: str, region: str) -> str:
     p = (
@@ -240,22 +217,20 @@ def build_header_block(*, uk_date: str, customer_name: str, prison_name: str, re
     return "".join(parts)
 
 # -------------------------------
-# Table rendering for app/html
+# Table rendering
 # -------------------------------
 def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
     if df is None or df.empty:
         return "<p><em>No data</em></p>"
-
     df_fmt = df.copy()
     for col in df_fmt.columns:
         if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand", "Amount"]):
             df_fmt[col] = df_fmt[col].apply(_fmt_cell)
-
     cls = "custom highlight" if highlight else "custom"
     return df_fmt.to_html(index=False, classes=cls, border=0, justify="left", escape=False)
 
 # -------------------------------
-# Adjust table (kept for backwards compat if needed)
+# Adjust table
 # -------------------------------
 def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
     if df is None or df.empty:
