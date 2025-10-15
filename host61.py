@@ -1,11 +1,7 @@
 import pandas as pd
 from datetime import date
-from config61 import CFG
 from utils61 import fmt_currency
 
-# -------------------------------
-# Host cost calculation
-# -------------------------------
 def generate_host_quote(
     *,
     workshop_hours: float,
@@ -17,141 +13,92 @@ def generate_host_quote(
     region: str,
     contracts: int,
     employment_support: str,
-    instructor_allocation: float,
-    lock_overheads: bool,
+    additional_benefits: bool,
 ):
-    breakdown = {}
-    breakdown["Prisoner Wages"] = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
+    from production61 import BAND3_COSTS
 
-    # --- Instructor cost ---
+    breakdown = {}
+
+    # Prisoner wages (monthly)
+    prisoner_monthly = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
+    breakdown["Prisoner Wages"] = prisoner_monthly
+
+    # Instructor salary (monthly) — hours-based and divided by contracts
     if not customer_covers_supervisors:
-        instructor_cost = sum((s / 12.0) * (float(instructor_allocation) / 100.0) for s in supervisor_salaries)
+        hours_frac = (float(workshop_hours) / 37.5) if workshop_hours > 0 else 0.0
+        contracts_safe = max(1, int(contracts))
+        instructor_cost = sum((s / 12.0) * hours_frac / contracts_safe for s in supervisor_salaries)
     else:
         instructor_cost = 0.0
     breakdown["Instructor Salary"] = instructor_cost
 
-    # --- Overheads 61% ---
-    if not customer_covers_supervisors:
-        base_overhead = instructor_cost
-    else:
-        from production61 import BAND3_COSTS
+    # Overheads base — if customer provides instructors, use shadow Band3 on same hours/contract fraction; else instructor cost
+    hours_frac = (float(workshop_hours) / 37.5) if workshop_hours > 0 else 0.0
+    contracts_safe = max(1, int(contracts))
+    if customer_covers_supervisors:
         shadow = BAND3_COSTS.get(region, 42247.81)
-        base_overhead = (shadow / 12.0) * (float(instructor_allocation) / 100.0)
-    if lock_overheads and supervisor_salaries:
-        base_overhead = (max(supervisor_salaries) / 12.0) * (float(instructor_allocation) / 100.0)
+        base_overhead = (shadow / 12.0) * hours_frac / contracts_safe
+    else:
+        base_overhead = instructor_cost
 
     overhead = base_overhead * 0.61
     breakdown["Overheads (61%)"] = overhead
 
-    # --- Development charge logic ---
-    dev_rate = 0.20
-    if employment_support in ("Employment on release/RoTL", "Post release"):
-        dev_rate = 0.10
-    elif employment_support == "Both":
-        dev_rate = 0.00
+    # Development charge — show "before" at 20% so we can display a discount line
+    dev_rate_before = 0.20
+    dev_before = overhead * dev_rate_before
 
-    dev_charge = overhead * dev_rate
-    breakdown["Development Charge"] = dev_charge
+    # Actual dev rate from employment support
+    s = (employment_support or "").lower()
+    if "both" in s:
+        dev_rate_actual = 0.0
+    elif "employment on release/rotl" in s or "post release" in s:
+        dev_rate_actual = 0.10
+    else:
+        dev_rate_actual = 0.20
+    dev_actual = overhead * dev_rate_actual
 
-    # --- Grand total ---
-    subtotal = sum(breakdown.values())
-    breakdown["Grand Total (£/month)"] = subtotal
+    dev_discount = max(0.0, dev_before - dev_actual)
 
-    # --- Create DataFrame ---
-    rows = [(k, v) for k, v in breakdown.items()]
+    # Additional benefit discount (if Both + additional_benefits): 10% off total before VAT
+    addl_benefit_discount = 0.0
+    subtotal_before = prisoner_monthly + instructor_cost + overhead + dev_before
+    if (employment_support == "Both") and additional_benefits:
+        addl_benefit_discount = subtotal_before * 0.10
+
+    revised_dev = dev_actual
+    subtotal_after = prisoner_monthly + instructor_cost + overhead + revised_dev
+    subtotal_after -= addl_benefit_discount
+
+    vat = subtotal_after * 0.20
+    grand_total = subtotal_after
+    grand_total_inc_vat = subtotal_after + vat
+
+    # Build rows in required order
+    rows = []
+    rows.append(("Prisoner Wages", prisoner_monthly))
+    rows.append(("Instructor Salary", instructor_cost))
+    rows.append(("Overheads (61%)", overhead))
+    rows.append(("Development Charge (before discount)", dev_before))
+    if dev_discount > 0:
+        rows.append(("Development charge discount", -dev_discount))
+        rows.append(("Revised development charge", revised_dev))
+    else:
+        rows.append(("Development charge", revised_dev))
+    if addl_benefit_discount > 0:
+        rows.append(("Additional benefit discount", -addl_benefit_discount))
+    rows.append(("Grand Total (£/month)", grand_total))
+    rows.append(("VAT (20%)", vat))
+    rows.append(("Grand Total + VAT (£/month)", grand_total_inc_vat))
+
     host_df = pd.DataFrame(rows, columns=["Item", "Amount (£)"])
-    for c in ["Amount (£)"]:
-        host_df[c] = host_df[c].apply(fmt_currency)
-
-    # --- Comparison table ---
-    comp_df = build_host_comparison(
-        num_prisoners=num_prisoners,
-        prisoner_salary=prisoner_salary,
-        num_supervisors=num_supervisors,
-        supervisor_salaries=supervisor_salaries,
-        region=region,
-        contracts=contracts,
-        customer_covers_supervisors=customer_covers_supervisors,
-        lock_overheads=lock_overheads,
-        employment_support=employment_support,
-        instructor_allocation=instructor_allocation,
-    )
+    host_df["Amount (£)"] = host_df["Amount (£)"].apply(fmt_currency)
 
     ctx = {
         "date": date.today().isoformat(),
         "region": region,
         "employment_support": employment_support,
-        "comparison": comp_df,
+        "additional_benefits": additional_benefits,
     }
 
     return host_df, ctx
-
-
-# -------------------------------
-# Comparison logic for Host
-# -------------------------------
-def build_host_comparison(
-    *,
-    num_prisoners: int,
-    prisoner_salary: float,
-    num_supervisors: int,
-    supervisor_salaries: list[float],
-    region: str,
-    contracts: int,
-    customer_covers_supervisors: bool,
-    lock_overheads: bool,
-    employment_support: str,
-    instructor_allocation: float,
-):
-    from production61 import BAND3_COSTS
-
-    recommended_pct = min(100.0, (float(37.5) / float(37.5)) * (1 / contracts) * 100.0)
-    # We'll adjust properly below
-    recommended_pct = min(100.0, (float(37.5) / 37.5) * (1 / contracts) * 100.0)
-    scenarios = {
-        "100%": 100.0,
-        "Recommended": recommended_pct,
-        "50%": 50.0,
-        "25%": 25.0,
-    }
-
-    rows = []
-    for label, pct in scenarios.items():
-        if not customer_covers_supervisors:
-            inst_cost = sum((s / 12.0) * (pct / 100.0) for s in supervisor_salaries)
-        else:
-            inst_cost = 0.0
-
-        if customer_covers_supervisors:
-            shadow = BAND3_COSTS.get(region, 42247.81)
-            base_overhead = (shadow / 12.0) * (pct / 100.0)
-        else:
-            base_overhead = inst_cost
-
-        if lock_overheads and supervisor_salaries:
-            base_overhead = (max(supervisor_salaries) / 12.0) * (pct / 100.0)
-
-        overhead = base_overhead * 0.61
-
-        # --- Dev charge logic ---
-        dev_rate = 0.20
-        if employment_support in ("Employment on release/RoTL", "Post release"):
-            dev_rate = 0.10
-        elif employment_support == "Both":
-            dev_rate = 0.00
-
-        dev_charge = overhead * dev_rate
-
-        prisoner_monthly = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
-        total = prisoner_monthly + inst_cost + overhead + dev_charge
-
-        rows.append({
-            "Scenario": label,
-            "Instructor %": f"{pct:.1f}%",
-            "Monthly Total (ex VAT £)": fmt_currency(total),
-            "Instructor Cost (£)": fmt_currency(inst_cost),
-            "Development Charge (£)": fmt_currency(dev_charge),
-            "Overhead (£)": fmt_currency(overhead),
-        })
-
-    return pd.DataFrame(rows)
