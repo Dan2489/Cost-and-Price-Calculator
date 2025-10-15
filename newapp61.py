@@ -401,7 +401,7 @@ if contract_type == "Production":
         if employment_support == "Both" and additional_benefits:
             _note_bits.append("additional benefit discount (10%) will be applied to overheads before VAT")
          if _note_bits:
-            st.info("Note: " + "; ".join(_note_bits)) 
+            st.info("Note: " + "; ".join)
        
 
         # Build segregated table (Contractual only)
