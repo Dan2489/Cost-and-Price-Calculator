@@ -61,7 +61,11 @@ if num_supervisors > 0 and region != "Select" and not customer_covers_supervisor
         st.caption(f"{region} — £{pay:,.0f}")
         supervisor_salaries.append(float(pay))
 
-contracts = st.number_input("How many contracts do they oversee in this workshop?", min_value=1, value=1)
+# Contracts: hide when customer provides instructors (assume 1)
+if not customer_covers_supervisors:
+    contracts = st.number_input("How many contracts do they oversee in this workshop?", min_value=1, value=1)
+else:
+    contracts = 1
 
 employment_support = st.selectbox(
     "What employment support does the customer offer?",
@@ -389,7 +393,7 @@ if contract_type == "Production":
         if _dev_rate_from_support(employment_support) < 0.20:
             _note_bits.append("development charge reduction applied")
         if employment_support == "Both" and additional_benefits:
-            _note_bits.append("additional benefit discount (10%) will be applied before VAT")
+            _note_bits.append("additional benefit discount (10%) will be applied before VAT (only against instructor, overheads and revised development)")
         if _note_bits:
             st.info("Note: " + "; ".join(_note_bits) + ". These reductions are applied to totals and not shown in unit prices.")
 
