@@ -42,7 +42,7 @@ def generate_host_quote(
     overhead = base_overhead * 0.61
 
     # -------------------------------
-    # Development charge logic (unchanged)
+    # Development charge logic
     # -------------------------------
     s = (employment_support or "").lower()
     if "both" in s:
@@ -83,15 +83,17 @@ def generate_host_quote(
         rows.append(("Instructor Salary", instructor_cost))
     rows.append(("Overheads (61%)", overhead))
 
-    # Dev lines: show before/discount/revised only if a discount exists; else single line if >0
-    if dev_actual > 0:
-        if dev_discount > 0:
-            rows.append(("Development Charge (before discount)", dev_before))
-            rows.append(("Development charge discount", -dev_discount))
-            rows.append(("Revised development charge", dev_actual))
-        else:
-            rows.append(("Development charge", dev_actual))
+    # Development lines:
+    # - If no discount (rate = 20%): show single "Development charge"
+    # - If discount applies (rate = 10% or 0% "Both"): show before, discount, and revised (can be £0.00)
+    if dev_rate_actual == 0.20:
+        rows.append(("Development charge", dev_actual))
+    else:
+        rows.append(("Development Charge (before discount)", dev_before))
+        rows.append(("Development charge discount", -dev_discount))
+        rows.append(("Revised development charge", dev_actual))
 
+    # Additional benefit discount (if any)
     if addl_benefit_discount > 0:
         rows.append(("Additional benefit discount", -addl_benefit_discount))
 
