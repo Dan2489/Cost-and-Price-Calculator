@@ -72,7 +72,7 @@ employment_support = st.selectbox(
     ["None", "Employment on release/RoTL", "Post release", "Both"],
 )
 
-# Additional benefits question (for Host discount rule)
+# Additional benefits question (after employment support)
 additional_benefits = st.checkbox("Are there any additional benefits to the prison?", value=False)
 additional_benefits_desc = ""
 if additional_benefits:
@@ -162,6 +162,24 @@ if contract_type == "Host":
                 pass
             return 0.0
 
+        # Prefer "before discount" if present (means a dev discount applied). Otherwise take single "Development charge".
+        dev_before_amt = _grab_amount("Development Charge (before")
+        dev_single_amt = _grab_amount("Development charge")
+        dev_revised_amt = _grab_amount("Revised development charge")
+
+        amounts = {
+            "Host: Prisoner wages (£/month)": _grab_amount("Prisoner Wages"),
+            "Host: Instructor Salary (£/month)": _grab_amount("Instructor Salary"),
+            "Host: Overheads 61% (£/month)": _grab_amount("Overheads (61%"),
+            "Host: Development charge (£/month)": dev_before_amt if dev_before_amt > 0 else dev_single_amt,
+            "Host: Development Reduction (£/month)": _grab_amount("Development charge discount"),
+            "Host: Development Revised (£/month)": dev_revised_amt if dev_revised_amt > 0 else dev_single_amt,
+            "Host: Additional benefit discount (£/month)": _grab_amount("Additional benefit discount"),
+            "Host: Grand Total (£/month)": _grab_amount("Grand Total (£/month)"),
+            "Host: VAT (£/month)": _grab_amount("VAT (20%)"),
+            "Host: Grand Total + VAT (£/month)": _grab_amount("Grand Total + VAT"),
+        }
+
         common = {
             "Quote Type": "Host",
             "Date": _uk_date(date.today()),
@@ -179,19 +197,6 @@ if contract_type == "Host":
             "VAT Rate (%)": 20.0,
             "Additional Benefits": "Yes" if additional_benefits else "No",
             "Additional Benefits (desc)": additional_benefits_desc,
-        }
-
-        amounts = {
-            "Host: Prisoner wages (£/month)": _grab_amount("Prisoner Wages"),
-            "Host: Instructor Salary (£/month)": _grab_amount("Instructor Salary"),
-            "Host: Overheads 61% (£/month)": _grab_amount("Overheads (61%"),
-            "Host: Development charge (£/month)": _grab_amount("Development Charge (before"),
-            "Host: Development Reduction (£/month)": _grab_amount("Development charge discount"),
-            "Host: Development Revised (£/month)": _grab_amount("Revised development charge"),
-            "Host: Additional benefit discount (£/month)": _grab_amount("Additional benefit discount"),
-            "Host: Grand Total (£/month)": _grab_amount("Grand Total (£/month)"),
-            "Host: VAT (£/month)": _grab_amount("VAT (20%)"),
-            "Host: Grand Total + VAT (£/month)": _grab_amount("Grand Total + VAT"),
         }
 
         host_csv = export_csv_bytes_rows([{**common, **amounts}])
@@ -293,12 +298,13 @@ if contract_type == "Production":
                 if errs:
                     st.error("Fix errors:\n- " + "\n- ".join(errs))
                 else:
+                    # For Production, customers can't provide instructor -> pass False explicitly
                     results = calculate_production_contractual(
                         items, int(prisoner_output),
                         workshop_hours=float(workshop_hours),
                         prisoner_salary=float(prisoner_salary),
                         supervisor_salaries=supervisor_salaries,
-                        customer_covers_supervisors=customer_covers_supervisors,
+                        customer_covers_supervisors=False,
                         region=region,
                         customer_type="Commercial",
                         apply_vat=True, vat_rate=20.0,
@@ -365,7 +371,7 @@ if contract_type == "Production":
                     num_prisoners=int(num_prisoners),
                     prisoner_salary=float(prisoner_salary),
                     supervisor_salaries=supervisor_salaries,
-                    customer_covers_supervisors=customer_covers_supervisors,
+                    customer_covers_supervisors=False,  # For Production, customers can't provide instructor
                     region=region,
                     customer_type="Commercial",
                     apply_vat=True, vat_rate=20.0,
@@ -393,7 +399,7 @@ if contract_type == "Production":
         if _dev_rate_from_support(employment_support) < 0.20:
             _note_bits.append("development charge reduction applied")
         if employment_support == "Both" and additional_benefits:
-            _note_bits.append("additional benefit discount (10%) will be applied before VAT (only against instructor, overheads and revised development)")
+            _note_bits.append("additional benefit discount (10%) will be applied to overheads before VAT")
         if _note_bits:
             st.info("Note: " + "; ".join(_note_bits) + ". These reductions are applied to totals and not shown in unit prices.")
 
@@ -409,21 +415,12 @@ if contract_type == "Production":
             output_scale2 = float(output_pct) / 100.0
 
             # Weekly instructor cost (hours-based / contracts)
-            if not customer_covers_supervisors:
-                inst_weekly_total = sum(
-                    (s / 52.0) * (float(workshop_hours) / 37.5) / max(1, int(contracts)) for s in supervisor_salaries
-                )
-            else:
-                inst_weekly_total = 0.0
+            inst_weekly_total = sum(
+                (s / 52.0) * (float(workshop_hours) / 37.5) / max(1, int(contracts)) for s in supervisor_salaries
+            )
 
-            # Overhead base (61%)
-            if customer_covers_supervisors:
-                from production61 import BAND3_COSTS
-                shadow = BAND3_COSTS.get(region, 42247.81)
-                overhead_base_weekly = (shadow / 52.0) * (float(workshop_hours) / 37.5) / max(1, int(contracts))
-            else:
-                overhead_base_weekly = inst_weekly_total
-
+            # Overhead base (61%) — for production we assume prison provides instructors (customer does NOT)
+            overhead_base_weekly = inst_weekly_total
             overheads_weekly_total = overhead_base_weekly * 0.61
             dev_weekly_total = overheads_weekly_total * dev_rate
 
@@ -519,7 +516,7 @@ if contract_type == "Production":
                 "Prisoners Employed": num_prisoners,
                 "Prisoner Salary / week": prisoner_salary,
                 "Instructors Count": num_supervisors,
-                "Customer Provides Instructors": "Yes" if customer_covers_supervisors else "No",
+                "Customer Provides Instructors": "No",  # enforced for Production
                 "Labour Output (%)": prisoner_output,
                 "Employment Support": employment_support,
                 "Contracts Overseen": contracts,
