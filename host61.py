@@ -60,19 +60,21 @@ def generate_host_quote(
 
     dev_discount = max(0.0, dev_before - dev_actual)
 
-    # Additional benefit discount (if Both + additional_benefits): 10% off total before VAT
-    addl_benefit_discount = 0.0
-    subtotal_before = prisoner_monthly + instructor_cost + overhead + dev_before
-    if (employment_support == "Both") and additional_benefits:
-        addl_benefit_discount = subtotal_before * 0.10
-
+    # Subtotal logic
+    # Subtotal BEFORE addl benefit (after applying development discount to get revised_dev)
     revised_dev = dev_actual
-    subtotal_after = prisoner_monthly + instructor_cost + overhead + revised_dev
-    subtotal_after -= addl_benefit_discount
+    subtotal_after_dev = prisoner_monthly + instructor_cost + overhead + revised_dev
 
-    vat = subtotal_after * 0.20
-    grand_total = subtotal_after
-    grand_total_inc_vat = subtotal_after + vat
+    # Additional benefit discount (ONLY on instructor + overhead + revised development), 10% if Both + benefits
+    addl_benefit_discount = 0.0
+    if (employment_support == "Both") and additional_benefits:
+        discount_base = instructor_cost + overhead + revised_dev
+        addl_benefit_discount = discount_base * 0.10
+
+    # Totals
+    grand_total = subtotal_after_dev - addl_benefit_discount
+    vat = grand_total * 0.20
+    grand_total_inc_vat = grand_total + vat
 
     # Build rows in required order
     rows = []
