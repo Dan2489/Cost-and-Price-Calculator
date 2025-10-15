@@ -19,14 +19,14 @@ def inject_govuk_css():
         th, td { padding:6px 10px; text-align:left; border-bottom:1px solid #ddd; }
         th { background:#f3f2f1; font-weight:600; }
         .red-text { color:#d4351c; font-weight:600; }
-
+        .panel {
+          background:#f3f2f1; border-left:5px solid #1d70b8; padding:10px 12px; margin:12px 0;
+          white-space:pre-wrap;  /* preserves line breaks from textarea */
+        }
         /* Make ALL Streamlit buttons GOV.UK green */
         .stButton > button {
-          background-color: #00703c !important;
-          color: #fff !important;
-          border-radius: 4px !important;
-          font-weight: 700 !important;
-          border: 0 !important;
+          background-color: #00703c !important; color: #fff !important;
+          border-radius: 4px !important; font-weight: 700 !important; border: 0 !important;
           padding: 0.4rem 0.9rem !important;
         }
         .stButton > button:hover { background-color:#005a30 !important; }
@@ -103,23 +103,52 @@ def render_table_html(df: pd.DataFrame) -> str:
     return "".join(h)
 
 # -----------------------------
-# HTML export
+# HTML export (full UTF-8 doc)
 # -----------------------------
-def export_html(host_df, prod_df, *, title="Quote", header_block=None, segregated_df=None) -> bytes:
-    html = [f"<h2>{escape(title)}</h2>"]
+def export_html(host_df, prod_df, *, title="Quote", header_block=None, segregated_df=None, notes: str | None = None) -> bytes:
+    head = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font-family: Helvetica, Arial, sans-serif; font-size: 15px; margin: 20px; }
+h1,h2,h3 { margin: 0 0 8px 0; }
+table { width:100%; border-collapse:collapse; margin:10px 0; }
+th, td { padding:6px 10px; text-align:left; border-bottom:1px solid #ddd; }
+th { background:#f3f2f1; font-weight:600; }
+.red-text { color:#d4351c; font-weight:600; }
+.panel { background:#f3f2f1; border-left:5px solid #1d70b8; padding:10px 12px; margin:12px 0; white-space:pre-wrap; }
+.small { color:#505a5f; font-size: 13px; }
+</style>
+</head>
+<body>
+<h2>{title}</h2>
+""".replace("{title}", escape(title))
+
+    parts = [head]
+
     if header_block:
-        html.append("<table>")
+        parts.append("<table>")
         for k, v in header_block.items():
-            html.append(f"<tr><th>{escape(k.title())}</th><td>{escape(str(v))}</td></tr>")
-        html.append("</table><br>")
+            parts.append(f"<tr><th>{escape(k.title())}</th><td>{escape(str(v))}</td></tr>")
+        parts.append("</table>")
+
+    if notes:
+        parts.append(f"<div class='panel'><div class='small'><strong>Notes</strong></div>{escape(notes)}</div>")
+
     if isinstance(host_df, pd.DataFrame):
-        html.append(render_table_html(host_df))
+        parts.append(render_table_html(host_df))
     if isinstance(prod_df, pd.DataFrame):
-        html.append(render_table_html(prod_df))
+        parts.append(render_table_html(prod_df))
     if isinstance(segregated_df, pd.DataFrame):
-        html.append("<h4>Segregated Costs</h4>")
-        html.append(render_table_html(segregated_df))
-    return "".join(html).encode("utf-8")
+        parts.append("<h4>Segregated Costs</h4>")
+        parts.append(render_table_html(segregated_df))
+
+    parts.append("</body></html>")
+    return "".join(parts).encode("utf-8")
 
 # -----------------------------
 # Header block (accepts benefits_desc)
