@@ -400,8 +400,7 @@ if contract_type == "Production":
             _note_bits.append("development charge reduction applied")
         if employment_support == "Both" and additional_benefits:
             _note_bits.append("additional benefit discount (10%) will be applied to overheads before VAT")
-        if _note_bits:
-            st.info("Note: " + "; ".join(_note_bits) + ". These reductions are applied to totals and not shown in unit prices.")
+       
 
         # Build segregated table (Contractual only)
         seg_df = None
