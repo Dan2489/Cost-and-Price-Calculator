@@ -17,11 +17,11 @@ def generate_host_quote(
 ):
     from production61 import BAND3_COSTS
 
-    breakdown = {}
-
+    # -------------------------------
+    # Core components
+    # -------------------------------
     # Prisoner wages (monthly)
     prisoner_monthly = float(num_prisoners) * float(prisoner_salary) * (52.0 / 12.0)
-    breakdown["Prisoner Wages"] = prisoner_monthly
 
     # Instructor salary (monthly) — hours-based and divided by contracts
     if not customer_covers_supervisors:
@@ -30,7 +30,6 @@ def generate_host_quote(
         instructor_cost = sum((s / 12.0) * hours_frac / contracts_safe for s in supervisor_salaries)
     else:
         instructor_cost = 0.0
-    breakdown["Instructor Salary"] = instructor_cost
 
     # Overheads base — if customer provides instructors, use shadow Band3 on same hours/contract fraction; else instructor cost
     hours_frac = (float(workshop_hours) / 37.5) if workshop_hours > 0 else 0.0
@@ -42,11 +41,12 @@ def generate_host_quote(
         base_overhead = instructor_cost
 
     overhead = base_overhead * 0.61
-    breakdown["Overheads (61%)"] = overhead
 
-    # Development charge — show "before" at 20% so we can display a discount line
-    dev_rate_before = 0.20
-    dev_before = overhead * dev_rate_before
+    # -------------------------------
+    # Development charge
+    # -------------------------------
+    # Baseline 20% (used only to show a discount line if applicable)
+    dev_before = overhead * 0.20
 
     # Actual dev rate from employment support
     s = (employment_support or "").lower()
@@ -58,37 +58,57 @@ def generate_host_quote(
         dev_rate_actual = 0.20
     dev_actual = overhead * dev_rate_actual
 
-    dev_discount = max(0.0, dev_before - dev_actual)
+    dev_discount = max(0.0, dev_before - dev_actual)  # >0 only when a discount applies
 
-    # Subtotal logic
-    # Subtotal BEFORE addl benefit (after applying development discount to get revised_dev)
-    revised_dev = dev_actual
-    subtotal_after_dev = prisoner_monthly + instructor_cost + overhead + revised_dev
-
-    # Additional benefit discount (ONLY on instructor + overhead + revised development), 10% if Both + benefits
+    # -------------------------------
+    # Additional benefits discount
+    # -------------------------------
+    # Only applies when Employment Support = Both AND additional benefits = Yes.
+    # It reduces **overheads only** by 10% and therefore reduces the total before VAT.
     addl_benefit_discount = 0.0
     if (employment_support == "Both") and additional_benefits:
-        discount_base = instructor_cost + overhead + revised_dev
-        addl_benefit_discount = discount_base * 0.10
+        addl_benefit_discount = overhead * 0.10
 
+    # -------------------------------
     # Totals
-    grand_total = subtotal_after_dev - addl_benefit_discount
+    # -------------------------------
+    # Total before VAT = wages + instructor + overhead + (development line)
+    # (If discount on development applies, we show before/discount/revised. Otherwise, single "Development charge".)
+    if dev_discount > 0:
+        # Revised dev equals dev_actual
+        revised_dev = dev_actual
+        subtotal_before_vat = prisoner_monthly + instructor_cost + overhead + revised_dev
+    else:
+        # No discount path: single dev line (dev_actual == dev_before)
+        revised_dev = None  # Not shown
+        subtotal_before_vat = prisoner_monthly + instructor_cost + overhead + dev_actual
+
+    # Apply additional benefit discount (overheads-only 10%)
+    grand_total = subtotal_before_vat - addl_benefit_discount
     vat = grand_total * 0.20
     grand_total_inc_vat = grand_total + vat
 
-    # Build rows in required order
+    # -------------------------------
+    # Build rows (order required)
+    # -------------------------------
     rows = []
     rows.append(("Prisoner Wages", prisoner_monthly))
     rows.append(("Instructor Salary", instructor_cost))
     rows.append(("Overheads (61%)", overhead))
-    rows.append(("Development Charge (before discount)", dev_before))
+
     if dev_discount > 0:
+        rows.append(("Development Charge (before discount)", dev_before))
         rows.append(("Development charge discount", -dev_discount))
-        rows.append(("Revised development charge", revised_dev))
+        rows.append(("Revised development charge", dev_actual))
     else:
-        rows.append(("Development charge", revised_dev))
+        # Only one line if no discount is applicable
+        if dev_actual > 0:
+            rows.append(("Development charge", dev_actual))
+        # If dev_actual == 0 (rare in host without 'Both'), omit line entirely.
+
     if addl_benefit_discount > 0:
         rows.append(("Additional benefit discount", -addl_benefit_discount))
+
     rows.append(("Grand Total (£/month)", grand_total))
     rows.append(("VAT (20%)", vat))
     rows.append(("Grand Total + VAT (£/month)", grand_total_inc_vat))
