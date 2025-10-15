@@ -17,10 +17,16 @@ def inject_govuk_css():
           font-size: 15px;
         }
         table { width:100%; border-collapse:collapse; margin:10px 0; }
-        th, td { padding:6px 10px; text-align:left; border-bottom:1px solid #ddd; }
+        th, td {
+          padding:6px 10px; text-align:left;
+          border:1px solid #b1b4b6;   /* BORDER ON TABLES */
+        }
         th { background:#f3f2f1; font-weight:600; }
         .red-text { color:#d4351c; font-weight:600; }
-        .panel { background:#f3f2f1; border-left:5px solid #1d70b8; padding:10px 12px; margin:12px 0; white-space:pre-wrap; }
+        .panel {
+          background:#f3f2f1; border-left:5px solid #1d70b8;
+          padding:10px 12px; margin:12px 0; white-space:pre-wrap;
+        }
 
         /* Make ALL Streamlit buttons GOV.UK green */
         .stButton > button {
@@ -41,7 +47,7 @@ def sidebar_controls(default_output: int):
     with st.sidebar:
         st.header("Controls")
         lock_overheads = st.checkbox("Lock Overheads to Highest Instructor", value=False)
-        instructor_pct_fixed = 100   # slider removed per requirements
+        instructor_pct_fixed = 100  # fixed (slider removed)
         prisoner_output = st.slider("Prisoner labour output (%)", 0, 100, default_output, step=5)
     return lock_overheads, instructor_pct_fixed, prisoner_output
 
@@ -118,7 +124,7 @@ def export_html(host_df, prod_df, *, title="Quote", header_block=None, segregate
 body {{ font-family: Helvetica, Arial, sans-serif; font-size: 15px; margin: 20px; }}
 h1,h2,h3 {{ margin: 0 0 8px 0; }}
 table {{ width:100%; border-collapse:collapse; margin:10px 0; }}
-th, td {{ padding:6px 10px; text-align:left; border-bottom:1px solid #ddd; }}
+th, td {{ padding:6px 10px; text-align:left; border:1px solid #b1b4b6; }}
 th {{ background:#f3f2f1; font-weight:600; }}
 .red-text {{ color:#d4351c; font-weight:600; }}
 .panel {{ background:#f3f2f1; border-left:5px solid #1d70b8; padding:10px 12px; margin:12px 0; white-space:pre-wrap; }}
@@ -137,7 +143,7 @@ th {{ background:#f3f2f1; font-weight:600; }}
         parts.append("</table>")
 
     if notes:
-        parts.append(f"<div class='panel'><div class='small'><strong>Notes</strong></div>{escape(notes)}</div>")
+        parts.append(f"<div class='panel'><div class='small'><strong>About this quote</strong></div>{escape(notes)}</div>")
 
     if isinstance(host_df, pd.DataFrame):
         parts.append(render_table_html(host_df))
