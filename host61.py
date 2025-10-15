@@ -40,7 +40,9 @@ def generate_host_quote(
 ):
     """
     Returns (df, ctx) where df is the breakdown table and ctx the raw numbers.
+    The additional 10% benefits reduction applies **only** if Employment Support = "Both".
     """
+
     alloc = _instructor_allocation(workshop_hours, contracts)
 
     # Prisoner wages (monthly)
@@ -63,40 +65,33 @@ def generate_host_quote(
     dev_rate = _dev_rate_from_support(employment_support)
     dev_before_m = overheads_m * dev_rate
 
-    # Benefits reductions (applied AFTER Dev charge is computed)
-    ben_pc = (float(benefits_discount_pc) / 100.0) if benefits_yes else 0.0
-    ben_inst = inst_m * ben_pc * (-1)
-    ben_over = overheads_m * ben_pc * (-1)
-    ben_dev  = dev_before_m * ben_pc * (-1)
+    # Apply benefits reduction ONLY when ES == "Both"
+    benefits_applicable = benefits_yes and (employment_support.strip().lower() == "both")
+    ben_pc = (float(benefits_discount_pc) / 100.0) if benefits_applicable else 0.0
 
-    dev_revised_m = dev_before_m + ben_dev  # after benefit reduction
+    # Single combined reduction over (inst + overheads + dev_before)
+    combined_base = inst_m + overheads_m + dev_before_m
+    ben_combined = -combined_base * ben_pc
 
-    # Totals: apply reductions after Dev line, before totals
-    subtotal_ex_vat = (
-        pris_wages_m
-        + inst_m + (ben_inst if benefits_yes else 0.0)
-        + overheads_m + (ben_over if benefits_yes else 0.0)
-        + dev_revised_m
-    )
+    # Revised Dev is dev_before less the portion of the combined reduction that relates to dev_before
+    # i.e., reduce dev by (dev_before * ben_pc)
+    dev_revised_m = dev_before_m * (1 - ben_pc)
+
+    # Subtotal ex VAT
+    subtotal_ex_vat = pris_wages_m + inst_m + overheads_m + dev_revised_m + (ben_combined if benefits_applicable else 0.0)
     vat = subtotal_ex_vat * (VAT_RATE_PC / 100.0)
     grand_ex = subtotal_ex_vat
     grand_inc = subtotal_ex_vat + vat
 
-    # ORDER: Dev first, then benefits lines, then Revised Dev, then totals
+    # ORDER: Dev first, then Benefits Reduction (if applicable), then Revised Dev, then totals
     rows = [
         {"Item": "Prisoner Wages", "Amount (£)": pris_wages_m},
         {"Item": "Instructor Salary", "Amount (£)": inst_m},
         {"Item": "Overheads", "Amount (£)": overheads_m},
         {"Item": "Development Charge", "Amount (£)": dev_before_m},
     ]
-    if benefits_yes and (ben_inst != 0 or ben_over != 0 or ben_dev != 0):
-        # list reductions AFTER the Dev line
-        if ben_inst != 0:
-            rows.append({"Item": "Additional benefits reduction – Instructor (10%)", "Amount (£)": ben_inst})
-        if ben_over != 0:
-            rows.append({"Item": "Additional benefits reduction – Overheads (10%)", "Amount (£)": ben_over})
-        if ben_dev != 0:
-            rows.append({"Item": "Additional benefits reduction – Development (10%)", "Amount (£)": ben_dev})
+    if benefits_applicable and ben_combined != 0:
+        rows.append({"Item": "Additional benefits reduction (10%)", "Amount (£)": ben_combined})
     rows.append({"Item": "Revised Development Charge", "Amount (£)": dev_revised_m})
     rows.append({"Item": "Grand Total (ex VAT)", "Amount (£)": grand_ex})
     rows.append({"Item": f"VAT ({int(VAT_RATE_PC)}%)", "Amount (£)": vat})
@@ -110,8 +105,9 @@ def generate_host_quote(
         "dev_rate": dev_rate,
         "dev_before_m": dev_before_m,
         "benefits": {
-            "yes": benefits_yes, "pc": ben_pc,
-            "inst": ben_inst, "over": ben_over, "dev": ben_dev,
+            "applicable": benefits_applicable,
+            "pc": ben_pc,
+            "combined": ben_combined,
         },
         "dev_revised_m": dev_revised_m,
         "grand_ex": grand_ex, "vat": vat, "grand_inc": grand_inc,
