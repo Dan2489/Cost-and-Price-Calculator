@@ -78,7 +78,7 @@ if not customer_covers_supervisors:
 else:
     contracts = 1
 
-# Employment support (renamed)
+# Employment support (includes "Pre-release support")
 employment_support = st.selectbox(
     "What employment support does the customer offer?",
     ["None", "Employment on release/RoTL", "Pre-release support", "Both"],
@@ -301,13 +301,14 @@ if contract_type == "Production":
                 if errs:
                     st.error("Fix errors:\n- " + "\n- ".join(errs))
                 else:
-                    # Calculate per-item prices/totals (includes prisoner+inst+oh+dev)
+                    # We still call calculate_production_contractual to get item Unit Price ex VAT (used for coverage calc),
+                    # but we will NOT render that table anymore.
                     results = calculate_production_contractual(
                         items, int(prisoner_output),
                         workshop_hours=float(workshop_hours),
                         prisoner_salary=float(prisoner_salary),
                         supervisor_salaries=supervisor_salaries,
-                        customer_covers_supervisors=False,   # production assumes prison pays instructors
+                        customer_covers_supervisors=False,
                         region=region,
                         customer_type="Commercial",
                         apply_vat=True, vat_rate=20.0,
@@ -318,18 +319,6 @@ if contract_type == "Production":
                         employment_support=employment_support,
                         contracts=int(contracts),
                     )
-
-                    # Main items table
-                    display_cols = [
-                        "Item", "Output %", "Capacity (units/week)", "Units/week",
-                        "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
-                        "Monthly Total ex VAT (£)", "Monthly Total inc VAT (£)"
-                    ]
-                    main_df = pd.DataFrame([{
-                        k: (None if r.get(k) is None else (round(float(r.get(k)), 4) if isinstance(r.get(k), (int, float)) else r.get(k)))
-                        for k in display_cols
-                    } for r in results])
-                    st.markdown(render_table_html(main_df), unsafe_allow_html=True)
 
                     # === Monthly Breakdown (Instructor cost, Overheads, Dev, Discounts) ===
                     hours_frac = (float(workshop_hours) / 37.5) if workshop_hours > 0 else 0.0
@@ -353,11 +342,10 @@ if contract_type == "Production":
                     dev_actual_monthly = dev_weekly_actual * 52.0 / 12.0
                     dev_disc_monthly = dev_weekly_discount * 52.0 / 12.0
 
-                    # Additional benefit discount (only when Employment Support = Both, and the checkbox is ticked)
+                    # Additional benefit discount (now 10% of (Instructor + Overheads))
                     addl_benefit_monthly = 0.0
                     if employment_support == "Both" and additional_benefits:
-                        # As discussed: apply to instructor cost (aligned with host logic evolution)
-                        addl_benefit_monthly = inst_monthly * 0.10
+                        addl_benefit_monthly = (inst_monthly + overheads_monthly) * 0.10
 
                     subtotal_monthly_ex_vat = inst_monthly + overheads_monthly + dev_actual_monthly - addl_benefit_monthly
                     total_with_vat_monthly = subtotal_monthly_ex_vat * 1.20
@@ -392,7 +380,6 @@ if contract_type == "Production":
                         if pricing_mode_key == "target":
                             units_week = float(targets[idx]) if (targets and idx < len(targets)) else 0.0
                         else:
-                            # capacity @ output %
                             cap_100 = (pris_assigned * workshop_hours * 60.0) / (mins_per_unit * pris_required) if (pris_assigned > 0 and mins_per_unit > 0) else 0.0
                             units_week = cap_100 * output_scale
 
@@ -416,7 +403,7 @@ if contract_type == "Production":
                             except Exception:
                                 unit_price_ex_vat = None
 
-                        # Units required per month to cover prisoner wages (using unit price ex VAT)
+                        # Units required per month to cover prisoner wages
                         if unit_price_ex_vat and unit_price_ex_vat > 0:
                             units_required_cover_pris = prisoner_monthly_item / unit_price_ex_vat
                         else:
@@ -463,7 +450,7 @@ if contract_type == "Production":
                     )
                     c1, c2 = st.columns(2)
                     with c1:
-                        # Single-row CSV (main table only here)
+                        # CSV for the breakdown only
                         common = {
                             "Quote Type": "Production",
                             "Date": _uk_date(date.today()),
@@ -475,7 +462,7 @@ if contract_type == "Production":
                             "Prisoners Employed": num_prisoners,
                             "Prisoner Salary / week": prisoner_salary,
                             "Instructors Count": num_supervisors,
-                            "Customer Provides Instructors": "No",  # enforced for Production
+                            "Customer Provides Instructors": "No",
                             "Labour Output (%)": prisoner_output,
                             "Employment Support": employment_support,
                             "Contracts Overseen": contracts,
@@ -483,17 +470,18 @@ if contract_type == "Production":
                             "Additional Benefits": "Yes" if additional_benefits else "No",
                             "Additional Benefits (desc)": additional_benefits_desc,
                         }
-                        csv_bytes = export_csv_single_row(common, main_df, None)
+                        csv_bytes = export_csv_single_row(common, prod_breakdown_df, None)
                         st.download_button(
-                            "Download CSV (Production)",
+                            "Download CSV (Production – Breakdown)",
                             data=csv_bytes,
-                            file_name="production_quote.csv",
+                            file_name="production_breakdown.csv",
                             mime="text/csv"
                         )
                     with c2:
+                        # HTML shows both: breakdown (main) + unit table (secondary)
                         st.download_button(
                             "Download PDF-ready HTML (Production)",
-                            data=export_html(None, main_df, title="Production Quote", header_block=header_block, segregated_df=None),
+                            data=export_html(None, prod_breakdown_df, title="Production Quote", header_block=header_block, segregated_df=unit_df),
                             file_name="production_quote.html",
                             mime="text/html"
                         )
