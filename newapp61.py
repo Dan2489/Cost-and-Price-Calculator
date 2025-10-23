@@ -324,7 +324,7 @@ if contract_type == "Production":
                     dev_monthly_eff = dev_weekly_eff * 52.0 / 12.0
                     dev_monthly_discount = dev_weekly_discount * 52.0 / 12.0
 
-                    # Always show "Additional benefit discount" line; mark (not applicable) if zero
+                    # Always show "Additional benefit discount"; show £0.00 (not applicable) when zero
                     addl_benefits_monthly_raw = (inst_monthly + overheads_monthly + dev_monthly_eff) * 0.10 if (employment_support == "Both" and additional_benefits) else 0.0
                     addl_benefits_label = "Additional benefit discount"
                     addl_benefits_amount = round(addl_benefits_monthly_raw, 2)
@@ -360,7 +360,7 @@ if contract_type == "Production":
                         per_item_df = pd.DataFrame(per_item_rows, columns=[
                             "Item", "Units/week", "Unit Cost (Prisoner Wage only £)", "Units to cover costs"
                         ])
-                        st.markdown("#### Per‑item prisoner‑only unit costs")
+                        st.markdown("#### Per-item prisoner-only unit costs")
                         st.markdown(render_table_html(per_item_df), unsafe_allow_html=True)
 
                     # ---- Visible itemised table (main)
@@ -434,14 +434,12 @@ if contract_type == "Production":
                     st.session_state["prod_df"] = df
 
     # ===== Results + Downloads (Production) =====
-    # Ensure CSV/HTML buttons are visible whenever we have a Production table.
     if contract_type == "Production" and "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
         df = st.session_state["prod_df"].copy()
         if customer_covers_supervisors and "Item" in df.columns:
             df = df[~df["Item"].astype(str).str.contains(r"Instructor (Salary|Cost)", case=False, na=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Note about reductions (informational)
         _note_bits = []
         if _dev_rate_from_support(employment_support) < 0.20:
             _note_bits.append("development charge reduction applied")
@@ -462,7 +460,6 @@ if contract_type == "Production":
 
         c1, c2 = st.columns(2)
         with c1:
-            # Single-row CSV of the visible Production table (no segregated section)
             common = {
                 "Quote Type": "Production",
                 "Date": _uk_date(date.today()),
@@ -474,7 +471,7 @@ if contract_type == "Production":
                 "Prisoners Employed": num_prisoners,
                 "Prisoner Salary / week": prisoner_salary,
                 "Instructors Count": num_supervisors,
-                "Customer Provides Instructors": "No",  # enforced for Production
+                "Customer Provides Instructors": "No",
                 "Labour Output (%)": prisoner_output,
                 "Employment Support": employment_support,
                 "Contracts Overseen": contracts,
@@ -496,4 +493,3 @@ if contract_type == "Production":
                 file_name="production_quote.html",
                 mime="text/html"
             )
-``
