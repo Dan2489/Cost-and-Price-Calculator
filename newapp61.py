@@ -1,3 +1,4 @@
+# newapp61.py
 import streamlit as st
 import pandas as pd
 from datetime import date
@@ -16,7 +17,6 @@ from production61 import (
     build_adhoc_table,
 )
 import host61
-
 # -------------------------------
 # Page setup
 # -------------------------------
@@ -122,24 +122,19 @@ if contract_type == "Host":
                 region=region,
                 contracts=contracts,
                 employment_support=employment_support,
-                additional_benefits=additional_benefits,
+                lock_overheads=False,                           # not locking to highest salary
+                benefits_checkbox=additional_benefits,          # use the UI toggle
+                benefits_desc=additional_benefits_desc,         # free text
+                benefits_discount_pc=10.0,                      # 10% if enabled + Both
             )
             st.session_state["host_df"] = host_df
 
     if "host_df" in st.session_state:
         df = st.session_state["host_df"].copy()
         if customer_covers_supervisors and "Item" in df.columns:
-            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
+            df = df[~df["Item"].astype(str).str.contains(r"Instructor (Salary|Cost)", case=False, na=False)]
 
-        # Colour reduction/discount rows red
-        if "Item" in df.columns:
-            df_display = df.copy()
-            df_display["Item"] = df_display["Item"].apply(
-                lambda x: f"<span style='color:red'>{x}</span>" if any(w in str(x).lower() for w in ["reduction", "discount"]) else x
-            )
-            st.markdown(render_table_html(df_display), unsafe_allow_html=True)
-        else:
-            st.markdown(render_table_html(df), unsafe_allow_html=True)
+        st.markdown(render_table_html(df), unsafe_allow_html=True)
 
         # === Downloads ===
         header_block = build_header_block(
@@ -162,22 +157,21 @@ if contract_type == "Host":
                 pass
             return 0.0
 
-        # Prefer "before discount" if present (means a dev discount applied). Otherwise take single "Development charge".
-        dev_before_amt = _grab_amount("Development Charge (before")
-        dev_single_amt = _grab_amount("Development charge")
-        dev_revised_amt = _grab_amount("Revised development charge")
+        # Prefer "before discount" if present (means a dev discount applied). Otherwise take revised dev.
+        dev_before_amt = _grab_amount("Development charge (20%")
+        dev_revised_amt = _grab_amount("Revised development")
 
         amounts = {
             "Host: Prisoner wages (£/month)": _grab_amount("Prisoner Wages"),
-            "Host: Instructor Salary (£/month)": _grab_amount("Instructor Salary"),
-            "Host: Overheads 61% (£/month)": _grab_amount("Overheads (61%"),
-            "Host: Development charge (£/month)": dev_before_amt if dev_before_amt > 0 else dev_single_amt,
-            "Host: Development Reduction (£/month)": _grab_amount("Development charge discount"),
-            "Host: Development Revised (£/month)": dev_revised_amt if dev_revised_amt > 0 else dev_single_amt,
-            "Host: Additional benefit discount (£/month)": _grab_amount("Additional benefit discount"),
-            "Host: Grand Total (£/month)": _grab_amount("Grand Total (£/month)"),
+            "Host: Instructor Cost (£/month)": _grab_amount("Instructor Cost"),
+            "Host: Overheads (£/month)": _grab_amount("Overheads"),
+            "Host: Development charge (£/month)": dev_before_amt,
+            "Host: Development Reduction (£/month)": _grab_amount("Development discount"),
+            "Host: Development Revised (£/month)": dev_revised_amt if dev_revised_amt > 0 else dev_before_amt,
+            "Host: Additional benefit discount (£/month)": _grab_amount("Additional benefits reduction"),
+            "Host: Grand Total (£/month)": _grab_amount("Grand Total (ex VAT)"),
             "Host: VAT (£/month)": _grab_amount("VAT (20%)"),
-            "Host: Grand Total + VAT (£/month)": _grab_amount("Grand Total + VAT"),
+            "Host: Grand Total + VAT (£/month)": _grab_amount("Grand Total (inc VAT)"),
         }
 
         common = {
@@ -207,7 +201,7 @@ if contract_type == "Host":
         with c2:
             st.download_button(
                 "Download PDF-ready HTML (Host)",
-                data=export_html(df, None, title="Host Quote", header_block=header_block, segregated_df=None),
+                data=export_html(df, None, title="Host Quote", header_block=header_block),
                 file_name="host_quote.html",
                 mime="text/html"
             )
@@ -315,9 +309,52 @@ if contract_type == "Production":
                         employment_support=employment_support,
                         contracts=int(contracts),
                     )
-                    display_cols = ["Item", "Output %", "Capacity (units/week)", "Units/week",
-                                    "Unit Cost (£)", "Unit Price ex VAT (£)", "Unit Price inc VAT (£)",
-                                    "Monthly Total ex VAT (£)", "Monthly Total inc VAT (£)"]
+
+                    # ---- Production (Contractual) summary breakdown (EXCLUDES prisoner wages)
+                    hours_frac = (float(workshop_hours) / 37.5) if workshop_hours > 0 else 0.0
+                    inst_weekly_total = sum((s / 52.0) * hours_frac / max(1, int(contracts)) for s in supervisor_salaries)
+                    overheads_weekly = inst_weekly_total * 0.61
+
+                    dev_rate_base = 0.20
+                    dev_rate_eff = _dev_rate_from_support(employment_support)
+
+                    dev_weekly_base = (inst_weekly_total + overheads_weekly) * dev_rate_base
+                    dev_weekly_eff = (inst_weekly_total + overheads_weekly) * dev_rate_eff
+                    dev_weekly_discount = dev_weekly_base - dev_weekly_eff
+
+                    inst_monthly = inst_weekly_total * 52.0 / 12.0
+                    overheads_monthly = overheads_weekly * 52.0 / 12.0
+                    dev_monthly_base = dev_weekly_base * 52.0 / 12.0
+                    dev_monthly_eff = dev_weekly_eff * 52.0 / 12.0
+                    dev_monthly_discount = dev_weekly_discount * 52.0 / 12.0
+
+                    addl_benefits_monthly = (inst_monthly + overheads_monthly + dev_monthly_eff) * 0.10 if (employment_support == "Both" and additional_benefits) else 0.0
+                    grand_total_ex_vat_excl_prisoners = inst_monthly + overheads_monthly + dev_monthly_eff - addl_benefits_monthly
+
+                    prod_summary_rows = [
+                        {"Item": "Instructor Cost (monthly)", "Amount (£)": round(inst_monthly, 2)},
+                        {"Item": "Overheads (61%) (monthly)", "Amount (£)": round(overheads_monthly, 2)},
+                        {"Item": "Development charge (before discount)", "Amount (£)": round(dev_monthly_base, 2)},
+                        {"Item": "Development charge discount", "Amount (£)": round(-abs(dev_monthly_discount), 2)},
+                        {"Item": "Revised development charge", "Amount (£)": round(dev_monthly_eff, 2)},
+                        {"Item": "Additional benefits reduction", "Amount (£)": round(-abs(addl_benefits_monthly), 2)},
+                        {"Item": "Grand Total (ex VAT, excl prisoner wages)", "Amount (£)": round(grand_total_ex_vat_excl_prisoners, 2)},
+                    ]
+                    prod_summary_df = pd.DataFrame(prod_summary_rows, columns=["Item", "Amount (£)"])
+
+                    st.markdown("### Production (Contractual) Breakdown")
+                    st.markdown(render_table_html(prod_summary_df), unsafe_allow_html=True)
+
+                    # ---- Visible itemised table
+                    display_cols = [
+                        "Item", "Output %", "Capacity (units/week)", "Units/week",
+                        "Unit Cost (£)",
+                        # "Unit Price ex VAT (£)",  # removed duplicate
+                        "Unit Price inc VAT (£)",
+                        "Monthly Total ex VAT (£)", "Monthly Total inc VAT (£)",
+                        "Unit Cost (Prisoner Wage only £)",
+                        "Units to cover costs",
+                    ]
                     if pricing_mode_key == "target":
                         display_cols += ["Feasible", "Note"]
 
@@ -387,111 +424,21 @@ if contract_type == "Production":
                     st.session_state["prod_items"] = None
                     st.session_state["prod_meta"] = None
 
-    # ===== Results + Segregated + Downloads =====
+    # ===== Results + Downloads =====
     if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
         df = st.session_state["prod_df"].copy()
         if customer_covers_supervisors and "Item" in df.columns:
-            df = df[~df["Item"].astype(str).str.contains("Instructor Salary", na=False)]
+            df = df[~df["Item"].astype(str).str.contains(r"Instructor (Salary|Cost)", case=False, na=False)]
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # Indicate reductions (without showing explicit discount rows)
+        # Informational note about reductions in Development/Benefits
         _note_bits = []
         if _dev_rate_from_support(employment_support) < 0.20:
             _note_bits.append("development charge reduction applied")
         if employment_support == "Both" and additional_benefits:
-            _note_bits.append("additional benefit discount (10%) will be applied to overheads before VAT")
-             
-
-        # Build segregated table (Contractual only)
-        seg_df = None
-        if st.session_state.get("prod_items") is not None:
-            items = st.session_state["prod_items"]
-            meta = st.session_state["prod_meta"] or {}
-            pricing_mode_key = meta.get("pricing_mode_key", "as-is")
-            targets = meta.get("targets", [])
-            output_pct = meta.get("output_pct", int(prisoner_output))
-            dev_rate = meta.get("dev_rate", _dev_rate_from_support(employment_support))
-            output_scale2 = float(output_pct) / 100.0
-
-            # Weekly instructor cost (hours-based / contracts)
-            inst_weekly_total = sum(
-                (s / 52.0) * (float(workshop_hours) / 37.5) / max(1, int(contracts)) for s in supervisor_salaries
-            )
-
-            # Overhead base (61%) — for production we assume prison provides instructors (customer does NOT)
-            overhead_base_weekly = inst_weekly_total
-            overheads_weekly_total = overhead_base_weekly * 0.61
-            dev_weekly_total = overheads_weekly_total * dev_rate
-
-            denom = sum(int(it.get("assigned", 0)) * workshop_hours * 60.0 for it in items)
-            rows = []
-            inst_monthly = inst_weekly_total * 52.0 / 12.0
-            monthly_sum_excl_inst = 0.0
-
-            for idx, it in enumerate(items):
-                name = (it.get("name") or "").strip() or f"Item {idx+1}"
-                mins_per_unit = float(it.get("minutes", 0))
-                pris_required = int(it.get("required", 1))
-                pris_assigned = int(it.get("assigned", 0))
-
-                if pris_assigned > 0 and mins_per_unit >= 0 and pris_required > 0 and workshop_hours > 0:
-                    cap_100 = (pris_assigned * workshop_hours * 60.0) / (mins_per_unit * pris_required) if mins_per_unit > 0 else 0.0
-                else:
-                    cap_100 = 0.0
-                capacity_units = cap_100 * output_scale2
-
-                if pricing_mode_key == "target":
-                    tgt = 0
-                    if targets and idx < len(targets):
-                        try: tgt = int(targets[idx])
-                        except Exception: tgt = 0
-                    units_for_pricing = float(tgt)
-                else:
-                    units_for_pricing = capacity_units
-
-                share = ((pris_assigned * workshop_hours * 60.0) / denom) if denom > 0 else 0.0
-
-                prisoner_weekly_item = pris_assigned * prisoner_salary
-                overheads_weekly_item = overheads_weekly_total * share
-                dev_weekly_item = dev_weekly_total * share
-
-                weekly_excl_inst = prisoner_weekly_item + overheads_weekly_item + dev_weekly_item
-                unit_cost_excl_inst = (weekly_excl_inst / units_for_pricing) if units_for_pricing > 0 else None
-                monthly_total_excl_inst = (units_for_pricing * unit_cost_excl_inst * 52.0 / 12.0) if unit_cost_excl_inst else None
-
-                monthly_sum_excl_inst += (monthly_total_excl_inst or 0.0)
-
-                rows.append({
-                    "Item": name,
-                    "Output %": int(output_pct),
-                    "Capacity (units/week)": 0 if capacity_units <= 0 else int(round(capacity_units)),
-                    "Units/week": 0 if units_for_pricing <= 0 else int(round(units_for_pricing)),
-                    "Unit Cost excl Instructor (£)": unit_cost_excl_inst,
-                    "Monthly Total excl Instructor ex VAT (£)": monthly_total_excl_inst,
-                })
-
-            rows.append({
-                "Item": "Instructor Salary (monthly)",
-                "Output %": "",
-                "Capacity (units/week)": "",
-                "Units/week": "",
-                "Unit Cost excl Instructor (£)": "",
-                "Monthly Total excl Instructor ex VAT (£)": inst_monthly,
-            })
-            rows.append({
-                "Item": "Grand Total (ex VAT)",
-                "Output %": "",
-                "Capacity (units/week)": "",
-                "Units/week": "",
-                "Unit Cost excl Instructor (£)": "",
-                "Monthly Total excl Instructor ex VAT (£)": monthly_sum_excl_inst + inst_monthly,
-            })
-
-            seg_df = pd.DataFrame(rows)
-
-        if seg_df is not None and not seg_df.empty:
-            st.markdown("### Segregated Costs")
-            st.markdown(render_table_html(seg_df), unsafe_allow_html=True)
+            _note_bits.append("additional benefits reduction (10%) applied before VAT")
+        if _note_bits:
+            st.caption("Note: " + "; ".join(_note_bits))
 
         # === Downloads (Production) ===
         header_block = build_header_block(
@@ -503,7 +450,7 @@ if contract_type == "Production":
 
         c1, c2 = st.columns(2)
         with c1:
-            # Single-row CSV including segregated section
+            # Single-row CSV (no segregated section)
             common = {
                 "Quote Type": "Production",
                 "Date": _uk_date(date.today()),
@@ -523,7 +470,7 @@ if contract_type == "Production":
                 "Additional Benefits": "Yes" if additional_benefits else "No",
                 "Additional Benefits (desc)": additional_benefits_desc,
             }
-            csv_bytes = export_csv_single_row(common, df, seg_df)
+            csv_bytes = export_csv_single_row(common, df)
             st.download_button(
                 "Download CSV (Production)",
                 data=csv_bytes,
@@ -533,7 +480,8 @@ if contract_type == "Production":
         with c2:
             st.download_button(
                 "Download PDF-ready HTML (Production)",
-                data=export_html(None, df, title="Production Quote", header_block=header_block, segregated_df=seg_df),
+                data=export_html(None, df, title="Production Quote", header_block=header_block),
                 file_name="production_quote.html",
                 mime="text/html"
             )
+``
