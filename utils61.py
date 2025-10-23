@@ -1,3 +1,4 @@
+# utils61.py
 import io
 import pandas as pd
 
@@ -6,50 +7,14 @@ import pandas as pd
 # -------------------------------
 def inject_govuk_css():
     import streamlit as st
+    # Add minimal spacing; extend with GOV.UK CSS if you wish
     st.markdown(
         """
         <style>
-          :root {
-            --govuk-green: #00703c;
-            --govuk-yellow: #ffdd00;
-          }
-
-          /* Buttons */
-          .stButton > button {
-            background: var(--govuk-green) !important;
-            color: #fff !important;
-            border: 2px solid transparent !important;
-            border-radius: 0 !important;
-            font-weight: 600;
-          }
-          .stButton > button:hover { filter: brightness(0.95); }
-          .stButton > button:focus {
-            outline: 3px solid var(--govuk-yellow) !important;
-            box-shadow: 0 0 0 1px #000 inset !important;
-          }
-
-          /* Tables */
-          table.custom { width: 100%; border-collapse: collapse; margin: 12px 0; }
-          table.custom th, table.custom td {
-            border: 1px solid #b1b4b6;
-            padding: 6px 10px;
-            text-align: left;
-          }
-          table.custom th { background: #f3f2f1; font-weight: bold; }
-          table.custom td.neg { color: #d4351c; }
-          table.custom tr.grand td { font-weight: bold; }
-          table.custom.highlight { background-color: #fff8dc; }
-
-          [data-testid="stSidebar"] {
-            min-width: 320px !important;
-            max-width: 320px !important;
-          }
-          @media (max-width: 768px) {
-            [data-testid="stSidebar"] {
-              min-width: 280px !important;
-              max-width: 280px !important;
-            }
-          }
+          .custom table { width: 100%; border-collapse: collapse; }
+          .custom th, .custom td { padding: 6px 8px; border-bottom: 1px solid #e5e5e5; text-align: left; }
+          .custom th { background: #f3f2f1; font-weight: 600; }
+          .highlight td { background: #fff7bf; }
         </style>
         """,
         unsafe_allow_html=True
@@ -113,23 +78,42 @@ def export_csv_bytes_rows(rows: list[dict], columns_order: list[str] | None = No
         df = df[columns_order]
     return export_csv_bytes(df)
 
-def export_csv_single_row(common: dict, main_df: pd.DataFrame, seg_df: pd.DataFrame | None) -> bytes:
+def export_csv_single_row(common: dict, main_df: pd.DataFrame) -> bytes:
+    """
+    Flattens 'common' inputs + the visible main table into a single-row CSV.
+    Segregated/secondary tables have been removed per requirement.
+    """
     row = {**common}
 
-    # Per-item fields
+    # Per-item fields from main_df
     if main_df is not None and not main_df.empty and "Item" in main_df.columns:
         for idx, (_, r) in enumerate(main_df.iterrows(), start=1):
             prefix = f"Item {idx} - "
             row[prefix + "Name"] = str(r.get("Item", ""))
-            row[prefix + "Output %"] = r.get("Output %", "")
-            row[prefix + "Capacity (units/week)"] = r.get("Capacity (units/week)", "")
-            row[prefix + "Units/week"] = r.get("Units/week", "")
-            row[prefix + "Unit Cost (£)"] = _to_float(r.get("Unit Cost (£)"))
-            row[prefix + "Unit Price ex VAT (£)"] = _to_float(r.get("Unit Price ex VAT (£)"))
-            row[prefix + "Unit Price inc VAT (£)"] = _to_float(r.get("Unit Price inc VAT (£)"))
-            row[prefix + "Monthly Total ex VAT (£)"] = _to_float(r.get("Monthly Total ex VAT (£)"))
-            row[prefix + "Monthly Total inc VAT (£)"] = _to_float(r.get("Monthly Total inc VAT (£)"))
+            if "Output %" in main_df.columns:
+                row[prefix + "Output %"] = r.get("Output %", "")
+            if "Capacity (units/week)" in main_df.columns:
+                row[prefix + "Capacity (units/week)"] = r.get("Capacity (units/week)", "")
+            if "Units/week" in main_df.columns:
+                row[prefix + "Units/week"] = r.get("Units/week", "")
+            # Try to cover common numeric columns
+            for col in [
+                "Unit Cost (£)",
+                "Unit Price inc VAT (£)",
+                "Monthly Total ex VAT (£)",
+                "Monthly Total inc VAT (£)",
+                "Unit Cost (Prisoner Wage only £)",
+                "Units to cover costs",
+                "Unit Cost (ex VAT £)",
+                "Unit Cost (inc VAT £)",
+                "Line Total (ex VAT £)",
+                "Line Total (inc VAT £)",
+                "Units",
+            ]:
+                if col in main_df.columns:
+                    row[prefix + col] = _to_float(r.get(col))
 
+        # Totals across visible monetary columns (if present)
         if "Monthly Total ex VAT (£)" in main_df.columns:
             row["Production: Total Monthly ex VAT (£)"] = float(
                 pd.to_numeric(main_df["Monthly Total ex VAT (£)"], errors="coerce").fillna(0).sum()
@@ -139,60 +123,30 @@ def export_csv_single_row(common: dict, main_df: pd.DataFrame, seg_df: pd.DataFr
                 pd.to_numeric(main_df["Monthly Total inc VAT (£)"], errors="coerce").fillna(0).sum()
             )
 
-    # Segregated data
-    if seg_df is not None and not seg_df.empty:
-        if "Item" in seg_df.columns:
-            j = 1
-            for _, rr in seg_df.iterrows():
-                nm = str(rr.get("Item", ""))
-                if nm in ("Instructor Salary (monthly)", "Grand Total (ex VAT)"):
-                    continue
-                prefix = f"Seg Item {j} - "
-                row[prefix + "Name"] = nm
-                row[prefix + "Output %"] = rr.get("Output %", "")
-                row[prefix + "Capacity (units/week)"] = rr.get("Capacity (units/week)", "")
-                row[prefix + "Units/week"] = rr.get("Units/week", "")
-                row[prefix + "Unit Cost excl Instructor (£)"] = _to_float(rr.get("Unit Cost excl Instructor (£)"))
-                row[prefix + "Monthly Total excl Instructor ex VAT (£)"] = _to_float(rr.get("Monthly Total excl Instructor ex VAT (£)"))
-                j += 1
-
-            inst_row = seg_df[seg_df["Item"].astype(str) == "Instructor Salary (monthly)"]
-            if not inst_row.empty:
-                row["Seg: Instructor Salary (monthly £)"] = _to_float(inst_row.iloc[0]["Monthly Total excl Instructor ex VAT (£)"])
-
-            gt_row = seg_df[seg_df["Item"].astype(str) == "Grand Total (ex VAT)"]
-            if not gt_row.empty:
-                row["Seg: Grand Total ex VAT (£)"] = _to_float(gt_row.iloc[0]["Monthly Total excl Instructor ex VAT (£)"])
-
     return export_csv_bytes_rows([row])
 
 # -------------------------------
 # HTML export (PDF-ready)
 # -------------------------------
-def export_html(df_host, df_prod, *, title: str, header_block: str = None, segregated_df=None) -> str:
+def export_html(df_host, df_prod, *, title: str, header_block: str | None = None) -> str:
     styles = """
     <style>
-        body { font-family: Arial, sans-serif; }
-        h1, h2, h3 { margin-bottom: 0.35rem; }
-        .meta { margin-bottom: 0.8rem; }
-        table.custom { width: 100%; border-collapse: collapse; margin: 12px 0; }
-        table.custom th, table.custom td { border: 1px solid #b1b4b6; padding: 6px 10px; text-align: left; }
-        table.custom th { background: #f3f2f1; font-weight: bold; }
-        table.custom.highlight { background-color: #fff8dc; }
-        .neg { color:#d4351c; }
+      body { font-family: Arial, Helvetica, sans-serif; color: #0b0c0c; }
+      h1 { font-size: 20px; margin: 0 0 10px 0; }
+      .block { margin: 10px 0 20px 0; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 6px 8px; border-bottom: 1px solid #e5e5e5; text-align: left; }
+      th { background: #f3f2f1; font-weight: 600; }
     </style>
     """
-    html = f"<html><head><meta charset='utf-8' />{styles}</head><body>"
+    html = f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{title}</title>{styles}</head><body>"
     html += f"<h1>{title}</h1>"
     if header_block:
-        html += f"<div class='meta'>{header_block}</div>"
+        html += f"<div class='block'>{header_block}</div>"
     if df_host is not None:
         html += render_table_html(df_host)
     if df_prod is not None:
         html += render_table_html(df_prod)
-    if segregated_df is not None and not segregated_df.empty:
-        html += "<h3>Segregated Costs</h3>"
-        html += render_table_html(segregated_df)
     html += "</body></html>"
     return html
 
@@ -208,11 +162,11 @@ def build_header_block(*, uk_date: str, customer_name: str, prison_name: str, re
         "time of order of which the customer shall be additionally liable to pay."
     )
     parts = [
-        f"<p><strong>Date:</strong> {uk_date}<br/>"
-        f"<strong>Customer:</strong> {customer_name}<br/>"
-        f"<strong>Prison:</strong> {prison_name}<br/>"
-        f"<strong>Region:</strong> {region}</p>",
-        f"<p>{p}</p>"
+        f"<p><strong>Date:</strong> {uk_date}</p>",
+        f"<p><strong>Customer:</strong> {customer_name}</p>",
+        f"<p><strong>Prison:</strong> {prison_name}</p>",
+        f"<p><strong>Region:</strong> {region}</p>",
+        f"<p>{p}</p>",
     ]
     return "".join(parts)
 
@@ -221,7 +175,7 @@ def build_header_block(*, uk_date: str, customer_name: str, prison_name: str, re
 # -------------------------------
 def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
     if df is None or df.empty:
-        return "<p><em>No data</em></p>"
+        return ""
     df_fmt = df.copy()
     for col in df_fmt.columns:
         if any(key in col for key in ["£", "Cost", "Total", "Price", "Grand", "Amount"]):
@@ -230,7 +184,7 @@ def render_table_html(df: pd.DataFrame, highlight: bool = False) -> str:
     return df_fmt.to_html(index=False, classes=cls, border=0, justify="left", escape=False)
 
 # -------------------------------
-# Adjust table
+# Adjust table (scale money-like columns)
 # -------------------------------
 def adjust_table(df: pd.DataFrame, factor: float) -> pd.DataFrame:
     if df is None or df.empty:
