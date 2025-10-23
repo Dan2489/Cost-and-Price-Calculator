@@ -1,4 +1,3 @@
-# production61.py
 from typing import List, Dict, Optional
 from datetime import date, timedelta
 import math
@@ -14,21 +13,19 @@ def labour_minutes_budget(num_pris: int, hours: float) -> float:
     return max(0.0, float(num_pris) * float(hours) * 60.0)
 
 def _working_days_between(start: date, end: date) -> int:
-    if end < start:
-        return 0
+    if end < start: return 0
     days, d = 0, start
     while d <= end:
-        if d.weekday() < 5:
-            days += 1
+        if d.weekday() < 5: days += 1
         d += timedelta(days=1)
     return days
 
 def _dev_rate_from_support(employment_support: str) -> float:
     """
     Dev charge baseline is 20%.
-    - Both -> 0%
-    - Either of ("Employment on release/RoTL", "Post release") -> 10%
-    - None/other -> 20%
+    - If employment_support == "Both" -> 0%
+    - If either of the two options ("Employment on release/RoTL" or "Post release") -> 10%
+    - Else (None/other) -> 20%
     """
     s = (employment_support or "").lower()
     if "both" in s:
@@ -57,23 +54,30 @@ def calculate_production_contractual(
     contracts: int = 1,
 ) -> List[Dict]:
     """
-    Returns list of per-item dicts including:
-      - Unit Cost (£) (ex VAT)
-      - Unit Price inc VAT (£) (if applicable)
-      - Monthly totals
-      - NEW: Unit Cost (Prisoner Wage only £), Units to cover costs
+    Returns a list of rows per item with added keys:
+      - 'Instructor Weekly Share (£)'          -> per-item instructor salary share (weekly)
+      - 'Unit Cost excl Instructor (£)'        -> ex-VAT unit cost excluding instructor
+      - 'Monthly Instructor Share (£)'         -> per-item instructor share per month (to check sums)
+    Existing keys remain unchanged.
+
+    Instructor/Overheads logic:
+      - Hours/contract fraction = (workshop_hours / 37.5) / max(1, contracts)
+      - If customer supplies instructors -> use Band 3 shadow for overhead base
+      - Else -> overhead base = instructor weekly total
+      - Overheads = base * 61%
+      - Dev charge rate derived from employment_support (0/10/20)
     """
     # Hours/contract fraction
     hours_frac = (float(workshop_hours) / 37.5) if workshop_hours > 0 else 0.0
     contracts_safe = max(1, int(contracts))
 
-    # Instructor weekly total (if customer provides instructor(s), this is 0)
+    # Instructor weekly total (if customer provides instructor, this is 0)
     if not customer_covers_supervisors:
         inst_weekly_total = sum((s / 52.0) * hours_frac / contracts_safe for s in supervisor_salaries)
     else:
         inst_weekly_total = 0.0
 
-    # Overheads base (shadow if customer provides; otherwise actual)
+    # Overhead base (shadow if customer provides; otherwise actual)
     if customer_covers_supervisors:
         shadow = BAND3_COSTS.get(region, 42247.81)
         overhead_base = (shadow / 52.0) * hours_frac / contracts_safe
@@ -82,9 +86,9 @@ def calculate_production_contractual(
 
     overheads_weekly = overhead_base * 0.61
 
-    # Development charge — NOW on (Instructor + Overheads)
+    # Development charge — derived from employment support
     dev_rate_eff = _dev_rate_from_support(employment_support)
-    dev_weekly_total = (inst_weekly_total + overheads_weekly) * dev_rate_eff
+    dev_weekly_total = overheads_weekly * dev_rate_eff
 
     denom_minutes = sum(int(it.get("assigned", 0)) * workshop_hours * 60.0 for it in items)
     output_scale = float(output_pct) / 100.0
@@ -119,10 +123,8 @@ def calculate_production_contractual(
         if pricing_mode == "target":
             tgt = 0
             if targets and idx < len(targets):
-                try:
-                    tgt = int(targets[idx])
-                except Exception:
-                    tgt = 0
+                try: tgt = int(targets[idx])
+                except Exception: tgt = 0
             units_for_pricing = float(tgt)
         else:
             units_for_pricing = capacity_units
@@ -144,17 +146,10 @@ def calculate_production_contractual(
             unit_cost_ex_vat = weekly_cost_item_total / units_for_pricing
             unit_cost_ex_vat_excl_inst = weekly_cost_item_excl_inst / units_for_pricing
             inst_weekly_share = inst_weekly_item
-
-            # NEW: prisoner-only unit cost and units to cover non-prisoner costs
-            unit_cost_prisoner_only = prisoner_weekly_item / units_for_pricing
-            monthly_non_prisoner = (inst_weekly_item + overheads_weekly_item + dev_weekly_item) * 52.0 / 12.0
-            units_to_cover_costs = math.ceil(monthly_non_prisoner / unit_cost_prisoner_only) if unit_cost_prisoner_only > 0 else None
         else:
             unit_cost_ex_vat = None
             unit_cost_ex_vat_excl_inst = None
             inst_weekly_share = 0.0
-            unit_cost_prisoner_only = None
-            units_to_cover_costs = None
 
         unit_price_inc_vat = None
         if unit_cost_ex_vat is not None:
@@ -171,17 +166,14 @@ def calculate_production_contractual(
             "Capacity (units/week)": 0 if capacity_units <= 0 else int(round(capacity_units)),
             "Units/week": 0 if units_for_pricing <= 0 else int(round(units_for_pricing)),
             "Unit Cost (£)": unit_cost_ex_vat,
-            # Kept for backward compatibility; UI will not display the duplicate
-            "Unit Price ex VAT (£)": unit_cost_ex_vat,
+            "Unit Price ex VAT (£)": unit_cost_ex_vat,              # kept for display consistency
             "Unit Price inc VAT (£)": unit_price_inc_vat,
             "Monthly Total ex VAT (£)": monthly_total_ex_vat,
             "Monthly Total inc VAT (£)": monthly_total_inc_vat,
+            # New fields for segregation:
             "Unit Cost excl Instructor (£)": unit_cost_ex_vat_excl_inst,
             "Instructor Weekly Share (£)": inst_weekly_share,
             "Monthly Instructor Share (£)": monthly_inst_share,
-            # NEW:
-            "Unit Cost (Prisoner Wage only £)": unit_cost_prisoner_only,
-            "Units to cover costs": units_to_cover_costs,
             "Feasible": feasible if pricing_mode == "target" else None,
             "Note": note,
         })
@@ -208,6 +200,8 @@ def calculate_adhoc(
     Returns:
       - per_line: name, units, unit_cost_ex_vat, unit_cost_inc_vat, line_total_ex_vat, line_total_inc_vat, wd_available, wd_needed_line_alone
       - totals, capacity, feasibility
+
+    Instructor/Overheads logic uses hours/contract fraction as in contractual mode.
     """
     output_scale = float(output_pct) / 100.0
     hours_per_day = float(workshop_hours) / 5.0
@@ -234,8 +228,7 @@ def calculate_adhoc(
 
     overheads_weekly = overhead_base * 0.61
     dev_rate_eff = _dev_rate_from_support(employment_support)
-    # NOW on (Instructor + Overheads)
-    dev_weekly_total = (inst_weekly_total + overheads_weekly) * dev_rate_eff
+    dev_weekly_total = overheads_weekly * dev_rate_eff
 
     prisoners_weekly_cost = num_prisoners * prisoner_salary
     weekly_cost_total = prisoners_weekly_cost + inst_weekly_total + overheads_weekly + dev_weekly_total
@@ -290,7 +283,7 @@ def calculate_adhoc(
     }
 
 def build_adhoc_table(result: Dict):
-    """Helper to produce the flat table used by the app for Ad-hoc."""
+    """Helper to produce the flat table used by newapp for Ad-hoc."""
     rows = []
     for p in result.get("per_line", []):
         rows.append({
