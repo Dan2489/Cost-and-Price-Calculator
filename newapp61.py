@@ -1,4 +1,3 @@
-# newapp61.py
 import streamlit as st
 import pandas as pd
 from datetime import date
@@ -17,6 +16,7 @@ from production61 import (
     build_adhoc_table,
 )
 import host61
+
 # -------------------------------
 # Page setup
 # -------------------------------
@@ -122,10 +122,10 @@ if contract_type == "Host":
                 region=region,
                 contracts=contracts,
                 employment_support=employment_support,
-                lock_overheads=False,                           # not locking to highest salary
-                benefits_checkbox=additional_benefits,          # use the UI toggle
-                benefits_desc=additional_benefits_desc,         # free text
-                benefits_discount_pc=10.0,                      # 10% if enabled + Both
+                lock_overheads=False,
+                benefits_checkbox=additional_benefits,
+                benefits_desc=additional_benefits_desc,
+                benefits_discount_pc=10.0,
             )
             st.session_state["host_df"] = host_df
 
@@ -136,7 +136,6 @@ if contract_type == "Host":
 
         st.markdown(render_table_html(df), unsafe_allow_html=True)
 
-        # === Downloads ===
         header_block = build_header_block(
             uk_date=_uk_date(date.today()),
             customer_name=customer_name,
@@ -144,7 +143,6 @@ if contract_type == "Host":
             region=region
         )
 
-        # ------- Host CSV: single flat row (inputs + results) -------
         source_df = st.session_state["host_df"].copy()
 
         def _grab_amount(needle: str) -> float:
@@ -157,7 +155,6 @@ if contract_type == "Host":
                 pass
             return 0.0
 
-        # Prefer "before discount" if present (means a dev discount applied). Otherwise take revised dev.
         dev_before_amt = _grab_amount("Development charge (20%")
         dev_revised_amt = _grab_amount("Revised development")
 
@@ -292,7 +289,6 @@ if contract_type == "Production":
                 if errs:
                     st.error("Fix errors:\n- " + "\n- ".join(errs))
                 else:
-                    # For Production, customers can't provide instructor -> pass False explicitly
                     results = calculate_production_contractual(
                         items, int(prisoner_output),
                         workshop_hours=float(workshop_hours),
@@ -310,7 +306,7 @@ if contract_type == "Production":
                         contracts=int(contracts),
                     )
 
-                    # ---- Production (Contractual) summary breakdown (EXCLUDES prisoner wages)
+                    # Breakdown block
                     hours_frac = (float(workshop_hours) / 37.5) if workshop_hours > 0 else 0.0
                     inst_weekly_total = sum((s / 52.0) * hours_frac / max(1, int(contracts)) for s in supervisor_salaries)
                     overheads_weekly = inst_weekly_total * 0.61
@@ -345,11 +341,9 @@ if contract_type == "Production":
                     st.markdown("### Production (Contractual) Breakdown")
                     st.markdown(render_table_html(prod_summary_df), unsafe_allow_html=True)
 
-                    # ---- Visible itemised table
                     display_cols = [
                         "Item", "Output %", "Capacity (units/week)", "Units/week",
                         "Unit Cost (£)",
-                        # "Unit Price ex VAT (£)",  # removed duplicate
                         "Unit Price inc VAT (£)",
                         "Monthly Total ex VAT (£)", "Monthly Total inc VAT (£)",
                         "Unit Cost (Prisoner Wage only £)",
@@ -364,13 +358,6 @@ if contract_type == "Production":
                     } for r in results])
 
                     st.session_state["prod_df"] = prod_df
-                    st.session_state["prod_items"] = items
-                    st.session_state["prod_meta"] = {
-                        "pricing_mode_key": pricing_mode_key,
-                        "targets": targets if pricing_mode_key == "target" else [],
-                        "output_pct": int(prisoner_output),
-                        "dev_rate": _dev_rate_from_support(employment_support)
-                    }
 
     else:  # Ad-hoc
         num_lines = st.number_input("How many product lines are needed?", min_value=1, value=1, step=1, key="adhoc_num_lines")
@@ -379,109 +366,3 @@ if contract_type == "Production":
             with st.expander(f"Product line {i+1}", expanded=(i == 0)):
                 c1, c2, c3 = st.columns([2, 1, 1])
                 with c1: item_name = st.text_input("Item name", key=f"adhoc_name_{i}")
-                with c2: units_requested = st.number_input("Units requested", min_value=1, value=100, step=1, key=f"adhoc_units_{i}")
-                with c3: deadline = st.date_input("Deadline", value=date.today(), key=f"adhoc_deadline_{i}")
-                c4, c5 = st.columns([1, 1])
-                with c4: pris_per_item = st.number_input("Prisoners to make one", min_value=1, value=1, step=1, key=f"adhoc_pris_req_{i}")
-                with c5: minutes_per_item = st.number_input("Minutes to make one", min_value=0.0, value=10.0, format="%.4f", key=f"adhoc_mins_{i}")
-                lines.append({
-                    "name": (item_name.strip() or f"Item {i+1}") if isinstance(item_name, str) else f"Item {i+1}",
-                    "units": int(units_requested),
-                    "deadline": deadline,
-                    "pris_per_item": int(pris_per_item),
-                    "mins_per_item": float(minutes_per_item),
-                })
-
-        if st.button("Generate Ad-hoc Costs", key="generate_adhoc"):
-            errs = validate_inputs()
-            if workshop_hours <= 0: errs.append("Hours per week must be > 0 for Ad-hoc")
-            for i, ln in enumerate(lines):
-                if ln["units"] <= 0: errs.append(f"Line {i+1}: Units requested must be > 0")
-                if ln["pris_per_item"] <= 0: errs.append(f"Line {i+1}: Prisoners to make one must be > 0")
-                if ln["mins_per_item"] < 0: errs.append(f"Line {i+1}: Minutes to make one cannot be negative")
-            if errs:
-                st.error("Fix errors:\n- " + "\n- ".join(errs))
-            else:
-                result = calculate_adhoc(
-                    lines, int(prisoner_output),
-                    workshop_hours=float(workshop_hours),
-                    num_prisoners=int(num_prisoners),
-                    prisoner_salary=float(prisoner_salary),
-                    supervisor_salaries=supervisor_salaries,
-                    customer_covers_supervisors=False,  # For Production, customers can't provide instructor
-                    region=region,
-                    customer_type="Commercial",
-                    apply_vat=True, vat_rate=20.0,
-                    today=date.today(),
-                    employment_support=employment_support,
-                    contracts=int(contracts),
-                )
-                if result["feasibility"]["hard_block"]:
-                    st.error(result["feasibility"]["reason"])
-                else:
-                    df, totals = build_adhoc_table(result)
-                    st.session_state["prod_df"] = df
-                    st.session_state["prod_items"] = None
-                    st.session_state["prod_meta"] = None
-
-    # ===== Results + Downloads =====
-    if "prod_df" in st.session_state and isinstance(st.session_state["prod_df"], pd.DataFrame):
-        df = st.session_state["prod_df"].copy()
-        if customer_covers_supervisors and "Item" in df.columns:
-            df = df[~df["Item"].astype(str).str.contains(r"Instructor (Salary|Cost)", case=False, na=False)]
-        st.markdown(render_table_html(df), unsafe_allow_html=True)
-
-        # Informational note about reductions in Development/Benefits
-        _note_bits = []
-        if _dev_rate_from_support(employment_support) < 0.20:
-            _note_bits.append("development charge reduction applied")
-        if employment_support == "Both" and additional_benefits:
-            _note_bits.append("additional benefits reduction (10%) applied before VAT")
-        if _note_bits:
-            st.caption("Note: " + "; ".join(_note_bits))
-
-        # === Downloads (Production) ===
-        header_block = build_header_block(
-            uk_date=_uk_date(date.today()),
-            customer_name=customer_name,
-            prison_name=prison_choice,
-            region=region
-        )
-
-        c1, c2 = st.columns(2)
-        with c1:
-            # Single-row CSV (no segregated section)
-            common = {
-                "Quote Type": "Production",
-                "Date": _uk_date(date.today()),
-                "Prison Name": prison_choice,
-                "Region": region,
-                "Customer Name": customer_name,
-                "Contract Type": "Production",
-                "Workshop Hours / week": workshop_hours,
-                "Prisoners Employed": num_prisoners,
-                "Prisoner Salary / week": prisoner_salary,
-                "Instructors Count": num_supervisors,
-                "Customer Provides Instructors": "No",  # enforced for Production
-                "Labour Output (%)": prisoner_output,
-                "Employment Support": employment_support,
-                "Contracts Overseen": contracts,
-                "VAT Rate (%)": 20.0,
-                "Additional Benefits": "Yes" if additional_benefits else "No",
-                "Additional Benefits (desc)": additional_benefits_desc,
-            }
-            csv_bytes = export_csv_single_row(common, df)
-            st.download_button(
-                "Download CSV (Production)",
-                data=csv_bytes,
-                file_name="production_quote.csv",
-                mime="text/csv"
-            )
-        with c2:
-            st.download_button(
-                "Download PDF-ready HTML (Production)",
-                data=export_html(None, df, title="Production Quote", header_block=header_block),
-                file_name="production_quote.html",
-                mime="text/html"
-            )
-``
